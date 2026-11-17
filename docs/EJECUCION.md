@@ -118,7 +118,7 @@ Abrir **http://localhost:4000**.
 
 ## 6. Variables de entorno (opcional)
 
-El servidor lee un archivo **`.env`** en la raíz del proyecto (vía `dotenv`) o variables del sistema:
+El servidor lee un archivo **`.env`** en la raíz del proyecto (vía `dotenv`) o variables del sistema. El repositorio incluye la plantilla **`.env.example`**: copia el archivo como `.env` (`copy .env.example .env` en Windows, `cp .env.example .env` en Linux/Mac) y completa los valores.
 
 | Variable | Default | Uso |
 |---|---|---|
@@ -129,16 +129,17 @@ El servidor lee un archivo **`.env`** en la raíz del proyecto (vía `dotenv`) o
 | `MONGODB_DB` | `finance_person` | Nombre de la base de datos |
 | `MONGODB_TEST_DB` | `finance_person_test` | Base efímera para pruebas |
 
-Ejemplo de `.env`:
+Ejemplo de `.env` (usa la **cadena estándar**, no `mongodb+srv://`, por el DNS de este entorno):
 
 ```
 PORT=4000
 JWT_SECRET=pon-un-secreto-largo-y-único-aqui
-MONGODB_URI=mongodb+srv://usuario:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+MONGODB_URI=mongodb://usuario:password@ac-yxrmadt-shard-00-00.k3xzdbh.mongodb.net:27017,ac-yxrmadt-shard-00-01.k3xzdbh.mongodb.net:27017,ac-yxrmadt-shard-00-02.k3xzdbh.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-2uo7u3-shard-0&retryWrites=true&w=majority
 MONGODB_DB=finance_person
+MONGODB_TEST_DB=finance_person_test
 ```
 
-> `.env` está en `.gitignore` y no se sube al repositorio.
+> `.env` está en `.gitignore` y no se sube al repositorio. Si la contraseña tiene caracteres especiales, codifícalos en la URL (`!` → `%21`, `@` → `%40`, `#` → `%23`). Recuerda además tener tu IP pública en el *Network Access* de Atlas.
 
 ## 7. Scripts disponibles
 

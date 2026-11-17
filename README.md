@@ -24,7 +24,7 @@ Aplicación web **SaaS** para registrar, organizar, visualizar y analizar ingres
 - **npm 8+** (incluido con Node.js)
 - Navegador moderno (Chrome, Edge, Firefox)
 
-> ⚠️ La app se conecta a **MongoDB Atlas**. Copia el bloque de variables de [docs/EJECUCION.md](docs/EJECUCION.md#6-variables-de-entorno-opcional) en un `.env` en la raíz (el archivo está en `.gitignore`). Sin `MONGODB_URI` se usa `mongodb://127.0.0.1:27017` como fallback local.
+> ⚠️ La app se conecta a **MongoDB Atlas**. Copia `.env.example` como `.env` en la raíz y completa la `MONGODB_URI` y el `JWT_SECRET` (el `.env` está en `.gitignore`; ver [docs/EJECUCION.md](docs/EJECUCION.md#6-variables-de-entorno-opcional)). Sin `MONGODB_URI` se usa `mongodb://127.0.0.1:27017` como fallback local.
 
 ## ✦ Instalación
 
