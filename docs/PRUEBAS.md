@@ -11,6 +11,8 @@ npm run test:ui # Verificación headless de la interfaz (23 checks)
 
 Código de salida: `0` = todo correcto · `1` = hay fallos.
 
+Última ejecución sobre Atlas: **89/89** checks de API y **23/23** de UI, todos correctos.
+
 > La suite UI usa **jsdom** (DOM headless en Node). Está declarado en `devDependencies` e `npm install` lo instala junto con el resto; si no lo tienes: `npm install --save-dev jsdom`.
 
 ## Cobertura de dependencias de prueba
@@ -76,12 +78,15 @@ Código de salida: `0` = todo correcto · `1` = hay fallos.
 
 Detalle técnico: en jsdom no hay canvas, así que `src/utils/charts.js` detecta el entorno headless (`NODE_ENV=test`) y no inicializa Chart.js, permitiendo que el resto del render (KPIs, presupuesto, cuentas) se complete y verifique. El flujo real en el navegador no cambia.
 
-## La suite detectó y corrigió 2 bugs reales
+## Incidencias detectadas y corregidas durante el desarrollo
 
-1. **`categoryRepository.update` lanzaba 500** al actualizar una categoría solo con `name` (bind de `undefined` en `color`). Se filtran ahora los campos `undefined` (`server/repositories/category.repository.js`).
-2. **El admin no podía renombrar ni eliminar categorías del sistema** (404): el chequeo usaba `isSystem !== 1` contra un valor booleano `true`. Corregido a `!cat.isSystem` (`server/services/admin.service.js`).
+1. **`categoryRepository.update` lanzaba 500** al actualizar una categoría solo con `name` (bind de `undefined` en `color`). Se filtran ahora los campos `undefined`.
+2. **El admin no podía renombrar ni eliminar categorías del sistema** (404): el chequeo usaba `isSystem !== 1` contra un valor booleano `true`. Corregido a `!cat.isSystem`.
+3. **Migración a MongoDB**: los repositorios pasaron de síncronos a `async/await` (driver nativo), se reemplazaron los JOIN por `$lookup`, las agregaciones por pipelines y las FK por cascadas explícitas. La API HTTP quedó idéntica.
+4. **`collation` en agregaciones**: el driver no expone `.collation()` en un `AggregationCursor`; se pasa como opción de `aggregate()`.
+5. **Seed lento**: se cachearon las fechas existentes y se agruparon las inserciones en paralelo para que el arranque no tardara minutos contra Atlas.
 
-## Base temporal para pruebas
+## Base de pruebas
 
 La suite fuerza `NODE_ENV=test`, por lo que `server/config/database.js` usa
 `MONGODB_TEST_DB` (por defecto `finance_person_test`) y limpia sus documentos al arrancar:

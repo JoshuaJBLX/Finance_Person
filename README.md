@@ -81,6 +81,16 @@ El usuario `demo` incluye un dataset detallado (12 meses de movimientos, 4 cuent
 - **RBAC**: usuario estándar y administrador.
 - **SaaS multiinquilino**: aislamiento de datos por `userId` en la capa de repositorio.
 
+## ✦ Estado actual
+
+| Ítem | Valor |
+|---|---|
+| Repositorio | https://github.com/JoshuaJBLX/Finance_Person.git (historial reiniciado: commit inicial `d71a9f6`) |
+| Base de datos | MongoDB Atlas · cluster M0 `Cluster0` · base `finance_person` |
+| Datos sembrados | 3 usuarios · 28 categorías · 9 cuentas · 267 movimientos · 132 presupuestos |
+| Pruebas | **89/89** API + **23/23** UI en verde |
+| Configuración | `.env` en la raíz (no versionado) con `MONGODB_URI`, `MONGODB_DB` y `JWT_SECRET` |
+
 ## ✦ Documentación
 
 | Tema | Archivo |
@@ -90,6 +100,8 @@ El usuario `demo` incluye un dataset detallado (12 meses de movimientos, 4 cuent
 | Arquitectura del backend y API | [docs/BACKEND.md](docs/BACKEND.md) |
 | Frontend, vistas y diseño | [docs/FRONTEND.md](docs/FRONTEND.md) |
 | Pruebas de la API (89 checks) | [docs/PRUEBAS.md](docs/PRUEBAS.md) |
+| Historias de usuario y Gherkin | [HISTORIAS_DE_USUARIO.md](HISTORIAS_DE_USUARIO.md) |
+| Guía pedagógica INVEST/BDD | [GUIA_PEDAGOGICA_HU_GHERKIN.md](GUIA_PEDAGOGICA_HU_GHERKIN.md) |
 
 ## ✦ Pruebas
 
@@ -98,7 +110,7 @@ npm test          # Suite e2e de la API (89 checks)
 npm run test:ui   # Verificación headless de la interfaz (23 checks, necesita jsdom)
 ```
 
-Suite end-to-end (89 verificaciones) que levanta la API contra una base temporal y cubre autenticación, RBAC, aislamiento multiinquilino y todos los CRUD. `test:ui` monta las vistas reales del frontend en **jsdom** contra la API y compara cada dato visualizado. Detalles en [docs/PRUEBAS.md](docs/PRUEBAS.md).
+Suite end-to-end (89 verificaciones) que levanta la API contra la base de pruebas `finance_person_test` de Atlas (sin tocar `finance_person`) y cubre autenticación, RBAC, aislamiento multiinquilino y todos los CRUD. `test:ui` monta las vistas reales del frontend en **jsdom** contra la API y compara cada dato visualizado. Detalles en [docs/PRUEBAS.md](docs/PRUEBAS.md).
 
 ## ✦ Estructura de carpetas
 
@@ -112,7 +124,8 @@ Finance_Person/
 ├── public/
 │   └── FP_LOGO.png
 ├── scripts/
-│   └── test-api.mjs         # Suite e2e de la API (npm test)
+│   ├── test-api.mjs         # Suite e2e de la API (npm test)
+│   └── verify-ui.mjs        # Verificación headless de UI (npm run test:ui)
 ├── server/                  # API REST (Express)
 │   ├── app.js               # Bootstrap del servidor + servir dist
 │   ├── config/              # database.js + seed.js
@@ -121,6 +134,7 @@ Finance_Person/
 │   ├── repositories/        # Acceso a MongoDB + aislamiento por usuario
 │   ├── routes/              # Definición de rutas (con auth/RBAC)
 │   ├── middleware/          # auth (JWT), errores
+│   ├── data/                # finance.db heredado de SQLite (ya no se usa)
 │   └── utils/               # helpers, manejo de errores
 └── src/                     # Frontend (Vite)
     ├── main.js              # Bootstrap del SPA + router por hash

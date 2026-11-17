@@ -60,6 +60,9 @@ npm install   # instalación con resolución desde package.json
 > **MongoDB Atlas** — crea un `.env` en la raíz con `MONGODB_URI` (y credenciales) antes de arrancar.
 > El proyecto ya incluye un cluster M0 apuntando a la base `finance_person`. Sin esa variable,
 > el driver intentará conectarse a `mongodb://127.0.0.1:27017` (fallará si no hay MongoDB local).
+> En este entorno se usa la **cadena estándar con hosts explícitos** (no `mongodb+srv://`) porque la
+> resolución SRV de Node devuelve `ECONNREFUSED`; la conexión a Atlas funciona igual.
+> Repositorio: https://github.com/JoshuaJBLX/Finance_Person.git
 
 ## 3. Modo desarrollo (recomendado)
 
@@ -79,7 +82,7 @@ Ejecuta en paralelo:
 Abrir **http://localhost:5173** en el navegador.
 
 - Vite **redirige** `/api/*` hacia la API (configurado en `vite.config.js`).
-- La base de datos se crea y **siembra automáticamente** al arrancar la API (`server/config/seed.js`).
+- La base de datos de Atlas se conecta y **siembra automáticamente** al arrancar la API (`server/config/seed.js`).
 
 ### Si algo falla
 

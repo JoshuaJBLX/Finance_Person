@@ -103,3 +103,9 @@ Los gráficos se registran por id y se destruyen al cambiar de vista (evita fuga
 - Confirmaciones destructivas: **SweetAlert2** (estilizado al tema).
 - Notificaciones del sistema: **Toastify** (esquina superior derecha).
 - Validaciones en vivo del servidor se muestran en el toast/alert correspondiente.
+
+## 9. Estado actual
+
+- La marca visible en la pantalla de acceso indica **MongoDB Atlas · Node.js · SaaS**.
+- Verificación headless (`npm run test:ui`): **23/23** comprobaciones correctas contra la API real (datos del panel admin, KPIs del dashboard, movimientos y refresco en vivo).
+- En `NODE_ENV=test`, `src/utils/charts.js` omite Chart.js porque jsdom no tiene canvas; el resto del render se verifica igual.

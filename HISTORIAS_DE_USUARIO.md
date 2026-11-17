@@ -1,16 +1,18 @@
 # 📄 Historias de Usuario y Criterios de Aceptación
 
-**Proyecto:** Dashboard de Finanzas Personales  
-**Stack:** Node.js · Express · MongoDB (Mongoose ODM)  
+**Proyecto:** Finance Person — Dashboard de Finanzas Personales  
+**Stack:** Node.js · Express · **MongoDB Atlas** (driver oficial `mongodb` v6, sin ODM) · JWT · bcryptjs · validator.js · Vite  
 **Enfoque:** SaaS multiinquilino · RBAC · Arquitectura por capas (Controller – Service – Repository)  
-**Estado:** Documento oficial para desarrollo SDD  
-**Versión:** 1.0  
+**Estado:** Documento oficial para desarrollo SDD — **actualizado a la implementación vigente (migración a MongoDB Atlas)**  
+**Versión:** 1.1
 
 ---
 
 ## 🎯 Propósito del documento
 
-Este documento recopila las Historias de Usuario (HU) y sus Criterios de Aceptación en formato **Gherkin** (`Dado que / Cuando / Entonces`) para guiar el desarrollo del Dashboard de Finanzas Personales. Cada historia está delimitada al proyecto, identifica roles precisos, funcionalidades concretas y un valor de negocio medible. Los criterios de aceptación contemplan flujos principales, flujos alternativos y casos de borde, con referencias técnicas específicas a MongoDB, Mongoose, JWT, bcrypt y expres-validator.
+Este documento recopila las Historias de Usuario (HU) y sus Criterios de Aceptación en formato **Gherkin** (`Dado que / Cuando / Entonces`) para guiar el desarrollo del Dashboard de Finanzas Personales. Cada historia está delimitada al proyecto, identifica roles precisos, funcionalidades concretas y un valor de negocio medible. Los criterios de aceptación contemplan flujos principales, flujos alternativos y casos de borde, con referencias técnicas ajustadas a la implementación real: MongoDB Atlas, driver `mongodb`, JWT, bcryptjs, `validator.js` y agregaciones.
+
+> **Nota de actualización:** la versión 1.0 describía un diseño con Mongoose, ObjectId y `express-validator`. La app final usa el driver nativo `mongodb`, IDs UUID v4 en `_id`, validación con `validator.js` en la capa de servicios y roles `user` / `admin`.
 
 ---
 
@@ -38,13 +40,13 @@ Este documento recopila las Historias de Usuario (HU) y sus Criterios de Aceptac
 
 **Título:** Registro de cuenta de usuario  
 **Rol:** Visitante / Nuevo usuario  
-**Quiero:** Registrarme en el sistema con correo electrónico y contraseña para crear mi perfil financiero.  
+**Quiero:** Registrarme en el sistema con nombre, apellido, correo y contraseña para crear mi perfil financiero.  
 **Para:** Tener acceso personalizado y aislado a mis datos financieros dentro del modelo SaaS.  
 **Prioridad:** Alta  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-El correo debe ser único en la colección `users`. La contraseña se hashea con bcrypt antes de almacenarse en MongoDB. Se asigna rol `usuario_estándar` por defecto. El campo `userId` (ObjectId de MongoDB) identifica al tenant para el aislamiento de datos multiinquilino.
+El correo debe ser único en la colección `users` (índice único). La contraseña se hashea con **bcryptjs (10 rondas)** antes de almacenarse. Se asigna el rol `user` por defecto. El campo `userId` (UUID v4, guardado en `_id`) identifica al tenant para el aislamiento multiinquilino. El registro crea además las 10 categorías por defecto y la cuenta "Efectivo" como principal (`authService.bootstrap`).
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -54,15 +56,29 @@ Funcionalidad: Registro de usuario
   Quiero registrar una cuenta de usuario
   Para acceder al Dashboard de Finanzas Personales de forma individual
 
-  Regla de negocio: El correo debe ser único en la colección `users` de MongoDB. La contraseña se hashea con bcrypt antes de guardarse. Se asigna rol `usuario_estándar` por defecto.
+  Regla de negocio: El correo debe ser único en la colección `users`. La contraseña se hashea con bcryptjs (10 rondas). Rol por defecto: "user".
 
   Escenario 1: Registro exitoso (flujo principal)
-    Dado que no existe ningún usuario con el correo "maria@finanzas.com" en la colección `users` de MongoDB
-    Cuando el usuario envía una petición POST a /api/auth/registro con correo "maria@finanzas.com" y contraseña "Segura123!"
-    Entonces el backend valida el payload con express-validator
-    Y hashea la contraseña con bcrypt (salto 12)
-    Y guarda un documento en la colección `users` con campos: _id (ObjectId), email, passwordHash, role: "usuario_estándar", tenantId: <ObjectId del usuario>, createdAt
-    Y devuelve HTTP 201 con el objeto de usuario creado (sin incluir passwordHash)
+    Dado que no existe ningún usuario con el correo "maria@finanzas.com" en la colección `users`
+    Cuando el usuario envía POST a /api/auth/register con { firstName, lastName, email, password }
+    Entonces el servicio valida los campos con validator.js (nombre no vacío, email válido, clave ≥ 8 caracteres con letras y números)
+    Y hashea la contraseña con bcryptjs (10 rondas)
+    Y guarda un documento en `users` con _id (UUID), firstName, lastName, email, passwordHash, role: "user", createdAt y updatedAt
+    Y crea 10 categorías por defecto y la cuenta "Efectivo" marcada como principal
+    Y devuelve HTTP 201 con { user, token } (sin incluir passwordHash)
+
+  Escenario 2: Correo duplicado (flujo alternativo)
+    Dado que ya existe un usuario con correo "maria@finanzas.com"
+    Cuando el usuario intenta registrarse con ese mismo correo
+    Entonces el sistema devuelve HTTP 409: "Ya existe una cuenta con este correo"
+    Y no se crea ningún documento en la colección `users`
+
+  Escenario 3: Correo inválido o contraseña débil (caso de borde)
+    Dado que el usuario envía correo "correo-invalido" y contraseña "123"
+    Cuando se intenta registrar
+    Entonces el servicio devuelve HTTP 400 con errores: "Correo electrónico inválido" y "La contraseña debe tener al menos 8 caracteres"
+    Y no se inserta ningún documento
+```
 
 ---
 
@@ -73,10 +89,10 @@ Funcionalidad: Registro de usuario
 **Quiero:** Iniciar sesión con credenciales válidas para obtener un token JWT y acceder a mis datos financieros.  
 **Para:** Autenticar mi identidad y autorizar el acceso solo a mis propios recursos (aislamiento multiinquilino).  
 **Prioridad:** Alta  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-El backend valida credenciales contra MongoDB usando bcrypt.compare(). El token JWT incluye el `_id` del usuario como `userId` y su `role` para RBAC. Las rutas protegidas usan express-jwt / passport-jwt.
+El backend valida credenciales contra MongoDB con `bcrypt.compare`. El token JWT HS256 incluye `sub` (id), `email`, `role` y `name`, con expiración de **12 h**. Las rutas protegidas usan el middleware `authenticate` de **express-jwt**, que coloca el payload en `req.auth`; `requireRole('admin')` restringe el grupo `/api/admin/*`. No se usa passport.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -86,31 +102,31 @@ Funcionalidad: Inicio de sesión (Login)
   Quiero iniciar sesión con correo y contraseña
   Para obtener un token JWT y acceder al dashboard protegido
 
-  Regla de negocio: Las credenciales se validan contra MongoDB. El JWT firmado contiene { userId, role, email }.
+  Regla de negocio: El JWT contiene { sub, email, role, name } y expira en 12 horas.
 
   Escenario 1: Credenciales válidas (flujo principal)
-    Dado que existe un usuario activo con correo "maria@finanzas.com" y contraseña hasheada en MongoDB
-    Cuando el usuario envía POST /api/auth/login con correo y contraseña correctos
+    Dado que existe un usuario con correo "maria@finanzas.com" y contraseña hasheada en MongoDB
+    Cuando envía POST /api/auth/login con correo y contraseña correctos
     Entonces el sistema compara la contraseña con bcrypt.compare()
-    Y genera un JWT firmado con JWT_SECRET conteniendo { userId, role, email }
-    Y devuelve HTTP 200 con el token y el rol del usuario
-    Y el frontend almacena el token para autorizar peticiones posteriores a la API de Express
+    Y genera un JWT firmado con JWT_SECRET
+    Y devuelve HTTP 200 con { user, token }
+    Y el frontend guarda la sesión en localStorage y envía "Authorization: Bearer <token>"
 
   Escenario 2: Contraseña incorrecta (flujo alternativo)
-    Dado que el usuario existe en MongoDB pero la contraseña no coincide
-    Cuando el usuario intenta iniciar sesión
-    Entonces el sistema devuelve HTTP 401 con mensaje genérico: "Credenciales inválidas"
-    Y no revela si el error fue el correo o la contraseña (prevención de enumeración de usuarios)
+    Dado que el usuario existe pero la contraseña no coincide
+    Cuando intenta iniciar sesión
+    Entonces devuelve HTTP 401: "Credenciales inválidas"
+    Y no revela si el error fue el correo o la contraseña
 
   Escenario 3: Usuario no encontrado (caso de borde)
-    Dado que no existe ningún documento con el correo proporcionado en la colección `users`
+    Dado que no existe ningún documento con el correo proporcionado
     Cuando se intenta iniciar sesión
-    Entonces el sistema devuelve el mismo mensaje genérico HTTP 401: "Credenciales inválidas"
+    Entonces devuelve el mismo mensaje genérico HTTP 401: "Credenciales inválidas"
 
   Escenario 4: Token expirado en petición protegida (caso de borde)
     Dado que el usuario tiene un JWT expirado
-    Cuando accede a una ruta protegida como GET /api/transacciones
-    Entonces el middleware de Express devuelve HTTP 401: "Token expirado. Inicie sesión nuevamente"
+    Cuando accede a una ruta protegida como GET /api/transactions
+    Entonces el middleware de express-jwt devuelve HTTP 401 y el frontend redirige al login
 ```
 
 ---
@@ -119,13 +135,13 @@ Funcionalidad: Inicio de sesión (Login)
 
 **Título:** Restablecimiento de contraseña  
 **Rol:** Usuario registrado  
-**Quiero:** Solicitar el restablecimiento de mi contraseña mediante un enlace enviado a mi correo registrado.  
+**Quiero:** Solicitar el restablecimiento de mi contraseña mediante un token enviado a mi correo registrado.  
 **Para:** Recuperar el acceso a mi cuenta si olvido mi contraseña, sin comprometer la seguridad del sistema.  
 **Prioridad:** Media  
-**Estimación:** 3 puntos  
+**Estimación:** 3 puntos
 
 #### Regla de negocio
-El sistema genera un token temporal de restablecimiento almacenado en el documento del usuario en MongoDB con expiración de 1 hora. El enlace se envía por correo (simulado o mediante servicio externo). Solo el propietario de la cuenta puede restablecer su contraseña.
+Flujo **demo sin SMTP**: se genera un token aleatorio de 32 bytes en hexadecimal, válido por **5 minutos**, que se guarda en la colección **`password_resets`** (documento independiente, no dentro del usuario) con `used: false`. La respuesta de la API devuelve el token (`devOnly: true`) para poder completar el flujo. Solo un token no usado y vigente permite cambiar la clave.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -135,50 +151,31 @@ Funcionalidad: Recuperación de contraseña
   Quiero solicitar el restablecimiento de mi contraseña
   Para recuperar el acceso a mi cuenta de forma segura
 
-  Regla de negocio: Se genera un token temporal con expiración de 1 hora almacenado en MongoDB. El correo debe existir en la colección `users`.
+  Regla de negocio: El token caduca en 5 minutos y se almacena en `password_resets`. La demo lo devuelve en la respuesta.
 
   Escenario 1: Solicitud de restablecimiento válida (flujo principal)
-    Dado que existe un usuario con correo "maria@finanzas.com" en MongoDB
-    Cuando el usuario envía POST /api/auth/olvide-contrasena con su correo
-    Entonces el sistema genera un token de restablecimiento y lo guarda en el documento del usuario en MongoDB con fecha de expiración de 1 hora
-    Y envía un enlace de restablecimiento al correo registrado
-    Y devuelve HTTP 200: "Si el correo existe, se ha enviado un enlace de restablecimiento"
+    Dado que existe un usuario con correo "maria@finanzas.com"
+    Cuando envía POST /api/auth/forgot-password con su correo
+    Entonces se genera un token y se guarda en `password_resets` con expiresAt = ahora + 5 minutos y used = false
+    Y devuelve HTTP 200 con { message, token, expiresAt, devOnly: true }
 
   Escenario 2: Correo no registrado (flujo alternativo)
-    Dado que no existe ningún usuario con el correo proporcionado en MongoDB
-    Cuando el usuario solicita restablecimiento de contraseña
-    Entonces el sistema devuelve HTTP 200 con el mismo mensaje genérico (no revela si el correo está registrado)
+    Dado que no existe ningún usuario con el correo proporcionado
+    Cuando solicita restablecimiento
+    Entonces devuelve HTTP 404: "No existe una cuenta con este correo"
     Y no genera ningún token
 
-  Escenario 3: Token expirado al restablecer (caso de borde)
-    Dado que el usuario tiene un token de restablecimiento expirado en MongoDB
-    Cuando intenta establecer una nueva contraseña con ese token
-    Entonces el sistema devuelve HTTP 400: "El token ha expirado. Solicite un nuevo restablecimiento"
-    Y no actualiza la contraseña
+  Escenario 3: Token expirado o ya usado al restablecer (caso de borde)
+    Dado que el token de restablecimiento expiró o ya fue marcado como usado
+    Cuando intenta establecer una nueva contraseña
+    Entonces devuelve HTTP 400: "El enlace expiró o ya fue utilizado"
+    Y no se actualiza passwordHash
 
   Escenario 4: Contraseña nueva débil (caso de borde)
     Dado que el usuario envía una contraseña nueva con menos de 8 caracteres
     Cuando intenta restablecer su contraseña
-    Entonces express-validator devuelve HTTP 400: "La contraseña debe tener al menos 8 caracteres"
-    Y no se actualiza passwordHash en MongoDB
-```
-
-  Escenario 2: Correo duplicado (flujo alternativo)
-    Dado que ya existe un usuario con correo "maria@finanzas.com" en MongoDB
-    Cuando el usuario intenta registrarse con ese mismo correo
-    Entonces el sistema devuelve HTTP 409 con mensaje: "El correo electrónico ya está registrado"
-    Y no se crea ningún documento en la colección `users`
-
-  Escenario 3: Correo inválido o contraseña débil (caso de borde)
-    Dado que el usuario envía correo "correo-invalido" y contraseña "123"
-    Cuando se intenta registrar
-    Entonces express-validator devuelve HTTP 400 con errores: "Correo inválido" y "La contraseña debe tener al menos 8 caracteres"
-    Y no se consulta la base de datos
-
-  Escenario 4: Fallo de conexión a MongoDB (caso de borde)
-    Dado que la base de datos MongoDB no está disponible
-    Cuando el usuario intenta registrarse
-    Entonces el middleware de manejo de errores devuelve HTTP 503: "Servicio no disponible. Intente nuevamente más tarde"
+    Entonces el servicio devuelve HTTP 400: "La contraseña debe tener al menos 8 caracteres"
+    Y no se actualiza passwordHash
 ```
 
 ---
@@ -186,49 +183,50 @@ Funcionalidad: Recuperación de contraseña
 ### HU-04: Gestión de categorías de ingresos y gastos (RBAC)
 
 **Título:** Crear y administrar categorías financieras  
-**Rol:** Administrador  
-**Quiero:** Crear, editar y eliminar categorías de movimientos financieros para que los usuarios las usen al registrar transacciones.  
-**Para:** Estandarizar la clasificación de gastos e ingresos y permitir reportes consistentes por categoría en el dashboard.  
+**Rol:** Usuario autenticado / Administrador  
+**Quiero:** Crear, editar y eliminar categorías de movimientos financieros para clasificar mis transacciones.  
+**Para:** Estandarizar la clasificación de gastos e ingresos y permitir reportes consistentes por categoría.  
 **Prioridad:** Alta  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-Solo usuarios con role `administrador` pueden crear categorías globales. Cada categoría pertenece a un `userId` (tenant) para aislamiento SaaS o es global si `userId` es null. Se usa Mongoose para validar el esquema. Los nombres deben ser únicos por usuario o globalmente según el caso.
+Cualquier usuario autenticado puede crear **categorías propias** (`userId` = su id). El administrador gestiona además las **categorías del sistema** (`userId: null`, `isSystem: true`) mediante `/api/admin/categories/system`, visibles para todos. `type` es `income` o `expense`. Existe un índice único parcial por `(userId, name, type)` que no aplica a las categorías globales. Al eliminar una categoría, sus movimientos quedan con `categoryId: null` y se borran sus presupuestos (equivalente a los antiguos `ON DELETE SET NULL / CASCADE`).
 
 #### Criterios de Aceptación (Gherkin)
 
 ```gherkin
-Funcionalidad: Gestión de categorías (Administrador)
-  Como administrador del sistema
+Funcionalidad: Gestión de categorías
+  Como usuario autenticado (o administrador para las globales)
   Quiero administrar categorías de ingresos y gastos
-  Para estandarizar la clasificación financiera de todos los usuarios
+  Para clasificar consistentemente mis movimientos
 
-  Regla de negocio: Solo el rol `administrador` puede crear categorías. Cada categoría se guarda en la colección `categories` con _id, userId, nombre, tipo, color, icono, createdAt.
+  Regla de negocio: Cada categoría se guarda en `categories` con _id (UUID), userId, name, type, color, isSystem y createdAt.
 
-  Escenario 1: Crear categoría de gasto (flujo principal)
-    Dado que el usuario autenticado tiene role `administrador`
-    Y envía POST /api/categorias con { nombre: "Alimentación", tipo: "gasto", color: "#e74c3c", icono: "utensils" }
-    Cuando el administrador confirma la creación
-    Entonces el servicio valida que `tipo` sea "ingreso" o "gasto"
-    Y guarda el documento en la colección `categories` con _id (ObjectId), userId: <id del admin o null>, nombre, tipo, color, icono, createdAt
+  Escenario 1: Crear categoría propia (flujo principal)
+    Dado que el usuario está autenticado
+    Cuando envía POST /api/categories con { name: "Alimentación", type: "expense", color: "#C7F13A" }
+    Entonces el servicio valida tipo y color (#RRGGBB)
+    Y guarda el documento con userId del token e isSystem = false
     Y devuelve HTTP 201 con la categoría creada
 
-  Escenario 2: Usuario estándar intenta crear categoría (flujo alternativo - denegado por RBAC)
-    Dado que el usuario autenticado tiene role `usuario_estándar`
-    Cuando intenta acceder a POST /api/categorias
-    Entonces el middleware de autorización devuelve HTTP 403: "Acceso denegado. Se requiere rol de administrador"
+  Escenario 2: Usuario intenta editar una categoría del sistema (denegado por RBAC)
+    Dado que la categoría tiene isSystem = true
+    Cuando un usuario estándar intenta editarla o borrarla
+    Entonces devuelve HTTP 403: "No tiene permisos sobre esta categoría"
+    Y el administrador sí puede hacerlo desde /api/admin/categories/system
 
-  Escenario 3: Nombre de categoría duplicado para el mismo tenant (caso de borde)
-    Dado que ya existe una categoría "Alimentación" con tipo "gasto" para el userId actual
-    Cuando el administrador intenta crear otra con el mismo nombre y tipo
-    Entonces el sistema devuelve HTTP 409: "La categoría ya existe para este usuario"
+  Escenario 3: Nombre duplicado para el mismo tenant (caso de borde)
+    Dado que ya existe una categoría "Alimentación" de tipo "expense" para ese userId
+    Cuando intenta crear otra con el mismo nombre y tipo
+    Entonces devuelve HTTP 409: "Ya existe una categoría con ese nombre"
     Y no se duplica el documento en MongoDB
 
-  Escenario 4: Eliminar categoría con transacciones asociadas (caso de borde)
-    Dado que existen transacciones que hacen referencia (ObjectId) a una categoría
-    Cuando el administrador intenta eliminar esa categoría
-    Entonces el sistema devuelve HTTP 400: "No se puede eliminar la categoría porque tiene transacciones asociadas"
-    Y no se ejecuta deleteOne en la colección `categories`
+  Escenario 4: Eliminar categoría con movimientos (caso de borde)
+    Dado que existen transacciones que referencian la categoría
+    Cuando se elimina la categoría
+    Entonces esas transacciones quedan con categoryId = null
+    Y se eliminan los presupuestos asociados a la categoría
+    Y devuelve HTTP 200: "Categoría eliminada."
 ```
 
 ---
@@ -237,13 +235,13 @@ Funcionalidad: Gestión de categorías (Administrador)
 
 **Título:** Administrar cuentas bancarias y medios de pago  
 **Rol:** Usuario autenticado  
-**Quiero:** Registrar cuentas (efectivo, tarjeta de crédito, cuenta bancaria) con saldo inicial para vincularlas a mis transacciones.  
+**Quiero:** Registrar cuentas (efectivo, tarjeta de crédito, banco, ahorros) con saldo inicial para vincularlas a mis transacciones.  
 **Para:** Controlar el dinero disponible en cada medio de pago y conciliar mis movimientos financieros.  
 **Prioridad:** Alta  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-Cada documento en la colección `accounts` debe incluir `userId` (ObjectId) para aislamiento de datos. El saldo inicial se almacena como número decimal. Se usan índices compuestos en MongoDB para optimizar consultas por usuario.
+Cada documento en `accounts` incluye `userId` (UUID) para aislamiento. `type` ∈ `cash|bank|savings|credit|other`; `initialBalance` ≥ 0; `isDefault` booleano. Índice único por `(userId, name)`. El saldo **no se almacena**: se calcula como `initialBalance + ingresos − gastos` (con signo negativo para cuentas de crédito) en `accountService.withBalance`.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -253,28 +251,31 @@ Funcionalidad: Gestión de cuentas/medios de pago
   Quiero crear y administrar mis cuentas financieras
   Para saber cuánto dinero tengo disponible en cada medio de pago
 
-  Regla de negocio: Cada cuenta pertenece al userId del token JWT. Se aplica índice compuesto { userId: 1, nombre: 1 }.
+  Regla de negocio: Cada cuenta pertenece al userId del JWT. Índice único { userId: 1, name: 1 }.
 
   Escenario 1: Crear cuenta bancaria (flujo principal)
-    Dado que el usuario está autenticado con token JWT válido
-    Cuando envía POST /api/cuentas con { nombre: "Banco Pichincha", tipo: "ahorros", saldoInicial: 500000, moneda: "COP" }
-    Entonces el servicio valida que `saldoInicial` sea un número positivo
-    Y guarda en MongoDB: _id, userId: <ObjectId del usuario>, nombre, tipo, saldoInicial, moneda, createdAt
-    Y crea un índice compuesto { userId: 1, nombre: 1 } si no existe
+    Dado que el usuario está autenticado
+    Cuando envía POST /api/accounts con { name: "Banco Principal", type: "bank", initialBalance: 5000 }
+    Entonces valida nombre no vacío, tipo permitido y saldo inicial ≥ 0
+    Y guarda en `accounts`: _id (UUID), userId, name, type, initialBalance, isDefault = false, createdAt
     Y devuelve HTTP 201 con la cuenta creada
 
   Escenario 2: Saldo inicial negativo (caso de borde)
-    Dado que el usuario intenta crear una cuenta con saldoInicial: -100000
-    Cuando se valida el payload con express-validator
-    Entonces el sistema devuelve HTTP 400: "El saldo inicial no puede ser negativo"
-    Y no se inserta el documento en la colección `accounts`
+    Dado que el usuario intenta crear una cuenta con initialBalance: -100
+    Cuando se valida el payload
+    Entonces devuelve HTTP 400: "El saldo inicial debe ser un número mayor o igual que 0"
+    Y no se inserta el documento en `accounts`
 
-  Escenario 3: Acceso a cuenta de otro usuario (caso de borde - aislamiento SaaS)
-    Dado que existe una cuenta con _id perteneciente al usuario A
-    Cuando el usuario B (diferente userId) intenta acceder a GET /api/cuentas/:id
-    Entonces el repositorio en Mongoose ejecuta: Account.findOne({ _id, userId: req.user.id })
-    Y al no encontrar coincidencia, devuelve HTTP 404: "Cuenta no encontrada"
-    Y no se expone información de otros usuarios
+  Escenario 3: Acceso a cuenta de otro usuario (aislamiento SaaS)
+    Dado que existe una cuenta perteneciente al usuario A
+    Cuando el usuario B intenta actualizarla
+    Entonces el repositorio filtra por { _id, userId } y no encuentra coincidencia
+    Y devuelve HTTP 404: "Cuenta no encontrada"
+
+  Escenario 4: Eliminar cuenta con movimientos (caso de borde)
+    Dado que la cuenta tiene transacciones asociadas
+    Cuando se intenta borrar
+    Entonces devuelve HTTP 400: "No se puede eliminar una cuenta con movimientos asociados"
 ```
 
 ---
@@ -286,10 +287,10 @@ Funcionalidad: Gestión de cuentas/medios de pago
 **Quiero:** Registrar una transacción asociando monto, fecha, categoría y cuenta para llevar el control de mis finanzas.  
 **Para:** Tener un historial realista que alimente el dashboard, los gráficos y los reportes mensuales.  
 **Prioridad:** Alta  
-**Estimación:** 8 puntos  
+**Estimación:** 8 puntos
 
 #### Regla de negocio
-El monto debe ser positivo. La fecha no puede ser futura. La categoría y la cuenta deben pertenecer al mismo usuario (userId). La transacción se guarda en la colección `transactions` con referencias ObjectId a `accounts` y `categories`. Se aplica sanitización de entradas para prevenir inyecciones NoSQL.
+`type` ∈ `income|expense`; `amount` > 0 (redondeado a 2 decimales); `date` en formato `AAAA-MM-DD` válido; `description` opcional (máx. 300 caracteres). La cuenta debe pertenecer al usuario y la categoría debe ser propia o del sistema. El documento se guarda en `transactions` con `_id` UUID, `userId`, `accountId`, `categoryId`, `type`, `amount`, `description`, `date`, `createdAt` y `updatedAt`. La validación se hace con `validator.js` en `transactionService`; no hay campo de moneda ni saldo almacenado en la cuenta.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -299,49 +300,34 @@ Funcionalidad: Registro de transacciones financieras
   Quiero crear una transacción de ingreso o gasto
   Para mantener actualizado mi historial financiero personal en MongoDB
 
-  Regla de negocio: El monto debe ser un número positivo mayor a cero. La fecha no puede ser futura. La categoría y cuenta deben pertenecer al userId del token. Sanitizar entradas para evitar inyecciones NoSQL.
+  Regla de negocio: Monto > 0, fecha AAAA-MM-DD válida, cuenta y categoría visibles para el userId del token.
 
   Escenario 1: Registrar gasto exitoso (flujo principal)
-    Dado que el usuario está autenticado (JWT válido con userId)
-    Y existe una cuenta con _id "64f..." y una categoría "Alimentación" tipo "gasto" asociadas a su userId
-    Cuando el usuario envía POST /api/transacciones con:
-      - tipo: "gasto"
-      - monto: 45000
-      - moneda: "COP"
-      - categoria: "64f...catId"
-      - cuenta: "64f...accId"
-      - fecha: "2026-11-15"
-      - descripcion: "Supermercado"
-    Entonces el servicio valida con express-validator y sanitiza los campos (evita operadores MongoDB como $where)
-    Y verifica que la categoría y la cuenta pertenezcan al userId del token
-    Y guarda el documento en `transactions` con _id, userId, accountId (ObjectId), categoryId (ObjectId), tipo, monto, fecha, descripcion, createdAt
-    Y actualiza el saldo de la cuenta restando el monto si es gasto
-    Y devuelve HTTP 201 con la transacción creada
+    Dado que el usuario está autenticado
+    Y existen una cuenta y una categoría asociadas a su userId
+    Cuando envía POST /api/transactions con { accountId, categoryId, type: "expense", amount: 45000, date: "2026-11-15", description: "Supermercado" }
+    Entonces el servicio valida tipo, monto y fecha
+    Y verifica que la cuenta y la categoría pertenezcan al usuario (o sean del sistema)
+    Y guarda el documento en `transactions` con _id (UUID), userId, accountId, categoryId, type, amount, description, date, createdAt y updatedAt
+    Y devuelve HTTP 201 con la transacción (incluye accountName y categoryName vía $lookup)
 
   Escenario 2: Registrar ingreso exitoso (flujo alternativo)
     Dado que el usuario está autenticado
-    Cuando registra un ingreso con tipo "ingreso", monto 2000000 y categoría "Salario"
-    Entonces el sistema incrementa el saldo de la cuenta asociada
-    Y la transacción queda registrada como ingreso en MongoDB
+    Cuando registra un ingreso con type "income" y amount 2000000
+    Entonces la transacción queda registrada como ingreso en MongoDB
+    Y el saldo de la cuenta aumenta en el cálculo de GET /api/accounts
 
   Escenario 3: Monto inválido o cero (caso de borde)
-    Dado que el usuario envía monto: 0 o monto: -5000
+    Dado que el usuario envía amount: 0 o amount: -5000
     Cuando se intenta crear la transacción
-    Entonces el backend devuelve HTTP 400: "El monto debe ser un número positivo mayor a cero"
+    Entonces devuelve HTTP 400: "El monto debe ser un número mayor que 0"
     Y no se escribe en la colección `transactions`
 
-  Escenario 4: Fecha futura (caso de borde)
-    Dado que la fecha actual es 15/11/2026
-    Cuando el usuario intenta registrar una transacción con fecha "2026-12-01"
-    Entonces el sistema devuelve HTTP 400: "La fecha no puede ser futura"
-    Y no persiste el documento
-
-  Escenario 5: Intento de inyección NoSQL (caso de borde - seguridad)
-    Dado que el usuario envía un payload malicioso con campo `{ "$gt": "" }` en el monto
-    Cuando el backend intenta usar el dato directamente en una consulta de Mongoose
-    Entonces express-validator sanitiza la entrada y rechaza el objeto
-    Y se devuelve HTTP 400: "Formato de datos inválido"
-    Y no se ejecuta ninguna consulta insegura contra MongoDB
+  Escenario 4: Cuenta o categoría de otro usuario (caso de borde - aislamiento)
+    Dado que la cuenta o categoría pertenece a otro usuario
+    Cuando se intenta crear la transacción
+    Entonces devuelve HTTP 400: "Cuenta inválida." o "Categoría inválida."
+    Y no se persiste el documento
 ```
 
 ---
@@ -350,13 +336,13 @@ Funcionalidad: Registro de transacciones financieras
 
 **Título:** Consultar y filtrar movimientos financieros  
 **Rol:** Usuario autenticado  
-**Quiero:** Filtrar mi historial de transacciones por rango de fechas, categoría, tipo de movimiento y cuenta.  
+**Quiero:** Filtrar mi historial de transacciones por rango de fechas, categoría, cuenta, tipo y búsqueda de texto.  
 **Para:** Analizar mis hábitos de consumo y encontrar transacciones específicas rápidamente.  
 **Prioridad:** Media  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-Todas las consultas a MongoDB incluyen automáticamente `{ userId: req.user.id }` para aislamiento multiinquilino. Se utiliza un índice compuesto `{ userId: 1, fecha: -1 }` para optimizar el ordenamiento y filtrado por fecha.
+Todas las consultas incluyen `{ userId }` en el filtro. La agregación usa `$lookup` a `accounts` y `categories` para añadir `accountName`, `accountType`, `categoryName`, `categoryColor` y `categoryType`. Orden por `date` descendente y `createdAt` descendente. Índices por `(userId, date)` y `(userId, type)`. Respuesta paginada: `{ rows, total, page, limit }`.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -366,31 +352,32 @@ Funcionalidad: Historial y filtros de transacciones
   Quiero consultar mis transacciones con filtros
   Para identificar patrones de gasto por período y categoría
 
-  Regla de negocio: El repositorio ejecuta Transaction.find({ userId, ...filtros }).populate("categoryId accountId").
+  Regla de negocio: El repositorio aplica $match por userId y $lookup de cuenta y categoría.
 
   Escenario 1: Filtrar por rango de fechas y tipo (flujo principal)
-    Dado que el usuario tiene transacciones en noviembre 2026
-    Cuando solicita GET /api/transacciones?fechaInicio=2026-11-01&fechaFin=2026-11-30&tipo=gasto
-    Entonces el repositorio ejecuta: Transaction.find({ userId, fecha: { $gte, $lte }, tipo }).populate("categoryId accountId")
-    Y devuelve HTTP 200 con solo las transacciones del usuario autenticado en ese rango
-    Y los resultados están ordenados por fecha descendente gracias al índice compuesto de MongoDB
+    Dado que el usuario tiene transacciones en noviembre de 2026
+    Cuando solicita GET /api/transactions?from=2026-11-01&to=2026-11-30&type=expense
+    Entonces la agregación filtra por userId, tipo y rango de fechas
+    Y devuelve HTTP 200 con solo las transacciones del usuario en ese rango
+    Y los resultados están ordenados por fecha descendente
 
-  Escenario 2: Filtrar por categoría (flujo alternativo)
+  Escenario 2: Filtrar por categoría y búsqueda (flujo alternativo)
     Dado que el usuario tiene transacciones de la categoría "Transporte"
-    Cuando solicita GET /api/transacciones?categoria=64f...catId
-    Entonces el sistema devuelve solo las transacciones de esa categoría para el userId autenticado
+    Cuando solicita GET /api/transactions?categoryId=<id>&search=Taxi
+    Entonces devuelve solo las transacciones que coinciden para ese userId
+    Y cada fila incluye categoryName y accountName
 
   Escenario 3: Sin transacciones en el filtro (caso de borde)
-    Dado que no hay transacciones de tipo "ingreso" en diciembre 2026 para este userId
-    Cuando el usuario filtra por ese mes y tipo
-    Entonces el sistema devuelve HTTP 200 con un arreglo vacío []
+    Dado que no hay movimientos de tipo "income" en diciembre de 2026 para este userId
+    Cuando filtra por ese mes y tipo
+    Entonces devuelve HTTP 200 con rows: [] y total: 0
     Y el frontend muestra: "No se encontraron movimientos"
 
-  Escenario 4: Parámetro de fecha inválido (caso de borde)
-    Dado que el usuario envía fechaInicio="fecha-invalida"
+  Escenario 4: Parámetros de paginación (caso de borde)
+    Dado que el usuario solicita ?page=2&limit=50
     Cuando se consulta el historial
-    Entonces express-validator devuelve HTTP 400: "Fecha de inicio inválida. Use formato YYYY-MM-DD"
-    Y no se consulta MongoDB
+    Entonces se aplican $skip y $limit sobre la agregación
+    Y la respuesta incluye page, limit y el total de filas del filtro
 ```
 
 ---
@@ -399,13 +386,13 @@ Funcionalidad: Historial y filtros de transacciones
 
 **Título:** Visualizar indicadores financieros en el dashboard  
 **Rol:** Usuario autenticado  
-**Quiero:** Ver el resumen mensual de ingresos, gastos, saldo y distribución por categorías mediante gráficos interactivos.  
+**Quiero:** Ver el resumen mensual de ingresos, gastos, balance, patrimonio y distribución por categorías mediante gráficos interactivos.  
 **Para:** Tomar decisiones financieras basadas en datos reales y visuales de mi situación actual.  
 **Prioridad:** Alta  
-**Estimación:** 8 puntos  
+**Estimación:** 8 puntos
 
 #### Regla de negocio
-El backend usa MongoDB Aggregation Pipeline ($match por userId y mes/año, $group por categoría, $sum de montos) para calcular totales de forma eficiente sin cargar todos los documentos en memoria.
+El backend expone `GET /api/reports/summary`, `/by-category`, `/by-account`, `/monthly` y `/full`. Los totales se calculan con **MongoDB Aggregation Pipeline** (`$match` por userId y rango, `$group`, `$sum`, `$substrBytes` para agrupar por `YYYY-MM`). El frontend renderiza los datos con Chart.js (`lineChart`, `doughnutChart`, `barChart`).
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -415,35 +402,30 @@ Funcionalidad: Dashboard y resumen financiero
   Quiero consultar indicadores mensuales en el dashboard
   Para analizar mi balance y distribución de gastos por categoría
 
-  Regla de negocio: Se ejecuta un aggregation pipeline en la colección `transactions` con $match por userId y rango de fechas del mes solicitado.
+  Regla de negocio: Se ejecutan pipelines de agregación sobre `transactions` con $match por userId y rango de fechas.
 
   Escenario 1: Resumen con datos existentes (flujo principal)
-    Dado que el usuario tiene transacciones en noviembre 2026 (ingresos: 2.000.000, gastos: 450.000)
-    Cuando solicita GET /api/dashboard/resumen?mes=11&anio=2026
-    Entonces el servicio ejecuta un aggregation pipeline:
-      1. $match: { userId, fecha: { $gte: inicioMes, $lte: finMes } }
-      2. $group: por tipo (ingreso/gasto) y por categoría con $sum de montos
-    Y devuelve HTTP 200 con:
-      - totalIngresos: 2000000
-      - totalGastos: 450000
-      - saldoDisponible: 1550000
-      - gastosPorCategoria: [{ categoria: "Alimentación", monto: 300000 }, { categoria: "Transporte", monto: 150000 }]
-    Y el frontend renderiza gráficos con Chart.js
+    Dado que el usuario tiene transacciones en noviembre de 2026
+    Cuando solicita GET /api/reports/summary?from=2026-11-01&to=2026-11-30
+    Entonces el servicio ejecuta agregaciones para sumar ingresos y gastos
+    Y devuelve HTTP 200 con { from, to, income, expenses, balance, savingsRate, count }
+    Y el frontend renderiza los KPIs y gráficos con Chart.js
 
   Escenario 2: Mes sin transacciones (caso de borde)
-    Dado que el usuario no tiene movimientos en octubre 2026
+    Dado que el usuario no tiene movimientos en octubre de 2026
     Cuando consulta el resumen de ese mes
-    Entonces el pipeline retorna ceros en todos los campos monetarios
-    Y se muestra mensaje: "Aún no hay movimientos registrados este mes"
+    Entonces income, expenses y balance son 0 y savingsRate es 0
+    Y se muestra el estado vacío correspondiente
 
-  Escenario 3: Mes fuera de rango (caso de borde)
-    Dado que el usuario consulta mes=13
-    Entonces el backend devuelve HTTP 400: "Mes inválido. Debe estar entre 1 y 12"
+  Escenario 3: Rango inválido (caso de borde)
+    Dado que el usuario consulta from=2026-12-01 y to=2026-11-01
+    Cuando solicita el resumen mensual
+    Entonces devuelve HTTP 400: "La fecha inicial no puede ser posterior a la final."
 
   Escenario 4: Usuario no autenticado (caso de borde - RBAC)
     Dado que no hay sesión activa ni token JWT
-    Cuando se solicita el resumen del dashboard
-    Entonces el sistema devuelve HTTP 401 y redirige al login
+    Cuando se solicita el resumen
+    Entonces devuelve HTTP 401 y el frontend redirige al login
 ```
 
 ---
@@ -452,13 +434,13 @@ Funcionalidad: Dashboard y resumen financiero
 
 **Título:** Definir y controlar presupuesto mensual  
 **Rol:** Usuario autenticado  
-**Quiero:** Establecer un límite de gasto mensual por categoría o global y recibir alertas cuando me acerco al límite.  
+**Quiero:** Establecer un límite de gasto mensual por categoría y ver su grado de cumplimiento.  
 **Para:** Controlar mis finanzas y evitar gastos excesivos.  
 **Prioridad:** Media  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-La colección `budgets` almacena `{ _id, userId, mes, anio, montoLimite, categoryId (opcional), createdAt }`. El seguimiento compara el monto gastado real (agregation pipeline) contra montoLimite.
+La colección `budgets` almacena `{ _id, userId, categoryId, month (AAAA-MM), amount, createdAt }`, con índice único por `(userId, categoryId, month)`. `POST /api/budgets` es un **upsert** (no devuelve 409 al repetir). El seguimiento compara el gasto real calculado con `sumByCategory` contra `amount`, produciendo `spent`, `remaining` y `progress` en `budgetService.listWithProgress`. La categoría debe ser propia o del sistema.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -468,26 +450,32 @@ Funcionalidad: Presupuestos mensuales
   Quiero definir un presupuesto mensual y hacer seguimiento
   Para controlar que mis gastos no superen lo planeado
 
-  Regla de negocio: No se permite crear dos presupuestos para el mismo userId, mes y anio.
+  Regla de negocio: Índice único por (userId, categoryId, month). POST actualiza o crea según exista.
 
   Escenario 1: Crear presupuesto mensual (flujo principal)
     Dado que el usuario está autenticado
-    Cuando envía POST /api/presupuestos con { mes: 11, anio: 2026, montoLimite: 500000, categoria: null }
-    Entonces se valida que no exista ya un presupuesto para ese userId, mes y anio
-    Y se guarda en MongoDB la colección `budgets`
-    Y se devuelve HTTP 201
+    Cuando envía POST /api/budgets con { categoryId, month: "2026-11", amount: 500 }
+    Entonces valida el formato del mes y que la categoría sea visible
+    Y guarda/actualiza el documento en `budgets`
+    Y devuelve HTTP 200 con el presupuesto creado o actualizado
 
   Escenario 2: Gasto excede el presupuesto (flujo alternativo - alerta)
-    Dado que existe un presupuesto de 500.000 COP para noviembre 2026
-    Y los gastos acumulados del mes son 520.000 COP
-    Cuando el usuario consulta el dashboard
-    Entonces el sistema indica que se superó el presupuesto en 20.000 COP (104% de uso)
-    Y muestra una alerta visual de presupuesto excedido
+    Dado que existe un presupuesto de 500 para noviembre de 2026
+    Y los gastos acumulados de la categoría son 520
+    Cuando el usuario consulta GET /api/budgets?month=2026-11
+    Entonces el documento incluye spent: 520, remaining: -20 y progress: 1.04
+    Y la barra de progreso se muestra en rojo
 
-  Escenario 3: Presupuesto duplicado para el mismo mes (caso de borde)
-    Dado que ya existe un presupuesto para userId X, mes 11, anio 2026
-    Cuando el usuario intenta crear otro para los mismos parámetros
-    Entonces se devuelve HTTP 409: "Ya existe un presupuesto para este mes"
+  Escenario 3: Presupuesto duplicado (caso de borde)
+    Dado que ya existe un presupuesto para userId, categoryId y month
+    Cuando se envía otro POST con los mismos parámetros
+    Entonces se actualiza el importe del mismo documento (upsert)
+    Y no se crea un duplicado
+
+  Escenario 4: Mes inválido (caso de borde)
+    Dado que el usuario envía month: "2026-13"
+    Cuando intenta crear el presupuesto
+    Entonces devuelve HTTP 400: "Mes inválido. Use formato AAAA-MM."
 ```
 
 ---
@@ -499,10 +487,10 @@ Funcionalidad: Presupuestos mensuales
 **Quiero:** Exportar mis transacciones y resúmenes en formato PDF y Excel.  
 **Para:** Archivar mis registros financieros o compartirlos con un asesor/contador.  
 **Prioridad:** Media  
-**Estimación:** 5 puntos  
+**Estimación:** 5 puntos
 
 #### Regla de negocio
-La exportación consulta solo los documentos del `userId` autenticado en MongoDB. SheetJS (xlsx) genera el Excel y jsPDF genera el PDF.
+Los datos provienen de `GET /api/reports/full?from=&to=&month=`, ya aislados por `userId`. La generación de archivos ocurre **en el cliente** (`src/views/ReportsView.js`): SheetJS (`xlsx`) produce `finance-person_YYYYMMDD_HHmm.xlsx` y jsPDF + autotable produce el PDF. No existe un endpoint de exportación en el servidor.
 
 #### Criterios de Aceptación (Gherkin)
 
@@ -512,65 +500,72 @@ Funcionalidad: Exportación de reportes
   Quiero exportar mis datos financieros a PDF y Excel
   Para tener copias de seguridad o compartir información externa
 
-  Regla de negocio: El servidor consulta MongoDB con filtro { userId, mes, anio } antes de generar el archivo.
+  Regla de negocio: El bundle se obtiene de /api/reports/full filtrado por userId. La generación es client-side.
 
   Escenario 1: Exportar a Excel (flujo principal)
     Dado que el usuario tiene transacciones registradas
-    Cuando solicita GET /api/reportes/exportar?formato=xlsx&mes=11&anio=2026
-    Entonces el servidor consulta MongoDB con filtro { userId, mes: 11, anio: 2026 }
-    Y genera un archivo .xlsx con columnas: fecha, tipo, categoría, cuenta, monto, descripción
-    Y devuelve el archivo para descarga con HTTP 200
+    Cuando solicita la exportación en formato Excel desde la vista Reportes
+    Entonces el frontend consume /api/reports/full
+    Y genera un archivo .xlsx con resumen y detalle de movimientos
+    Y lo descarga como finance-person_YYYYMMDD_HHmm.xlsx
 
   Escenario 2: Exportar a PDF (flujo alternativo)
-    Dado que el usuario solicita formato=pdf
+    Dado que el usuario solicita formato PDF
     Cuando se genera el reporte
-    Entonces se devuelve un archivo .pdf con tabla de movimientos y resumen de totales
+    Entonces se devuelve un archivo .pdf con cabecera de marca, resumen y tabla de movimientos
 
   Escenario 3: Sin datos para exportar (caso de borde)
-    Dado que no hay transacciones en el período seleccionado para este userId
-    Cuando se solicita exportación
-    Entonces se devuelve HTTP 404: "No hay datos para exportar en el período seleccionado"
+    Dado que no hay transacciones en el período seleccionado
+    Cuando se solicita la exportación
+    Entonces el reporte se genera con totales en cero y el detalle vacío
+    Y no se produce ningún error
 ```
 
 ---
 
 ### HU-11: Gestión de usuarios y roles (RBAC)
 
-**Título:** Administrar usuarios y roles del sistema  
+**Título:** Administrar usuarios del sistema  
 **Rol:** Administrador  
-**Quiero:** Ver, editar roles y desactivar usuarios para controlar el acceso al sistema.  
-**Para:** Mantener la seguridad y gobernanza de la plataforma SaaS.  
+**Quiero:** Ver usuarios, consultar sus movimientos y eliminar cuentas para controlar el acceso a la plataforma.  
+**Para:** Mantener la seguridad y gobernanza del sistema SaaS.  
 **Prioridad:** Baja  
-**Estimación:** 3 puntos  
+**Estimación:** 3 puntos
 
 #### Regla de negocio
-Solo el rol `administrador` puede modificar roles de otros usuarios. No se permite eliminar al último administrador del sistema para evitar quedar sin acceso de gestión.
+Solo el rol `admin` accede a `/api/admin/*` mediante `requireRole('admin')`. El panel ofrece `/admin/stats` (u `/overview`), `/admin/users`, `/admin/users/:id/transactions`, `DELETE /admin/users/:id` y CRUD de `/admin/categories/system`. **No se permite eliminar administradores** (HTTP 400). La eliminación de un usuario borra en cascada sus categorías, cuentas, movimientos, presupuestos y tokens de reseteo. No existe endpoint para cambiar el rol de un usuario.
 
 #### Criterios de Aceptación (Gherkin)
 
 ```gherkin
 Funcionalidad: Gestión de usuarios (Administrador)
   Como administrador
-  Quiero administrar usuarios y roles
-  Para controlar el acceso al sistema según el modelo RBAC
+  Quiero administrar usuarios y ver el global de la plataforma
+  Para controlar el acceso según el modelo RBAC
 
-  Regla de negocio: El campo role en la colección `users` solo puede ser modificado por un administrador autenticado.
+  Regla de negocio: /api/admin/* está protegido por requireRole('admin'). No se pueden borrar admins.
 
-  Escenario 1: Cambiar rol de usuario (flujo principal)
+  Escenario 1: Ver estadísticas globales (flujo principal)
     Dado que el administrador está autenticado
-    Cuando envía PUT /api/usuarios/:id/rol con { role: "administrador" }
-    Entonces se actualiza el campo role en la colección `users` de MongoDB
-    Y se devuelve HTTP 200
+    Cuando solicita GET /api/admin/stats
+    Entonces devuelve HTTP 200 con usuarios, movimientos, ingresos, gastos, cuentas, categorías y presupuestos globales
+    Y el panel se actualiza solo ante cambios de datos (evento fp:data-changed)
 
-  Escenario 2: Usuario estándar intenta acceder a administración (flujo alternativo - denegado)
-    Dado que el usuario tiene role `usuario_estándar`
-    Cuando intenta acceder a rutas de administración
-    Entonces se devuelve HTTP 403: "Acceso denegado"
+  Escenario 2: Usuario estándar intenta acceder a administración (denegado)
+    Dado que el usuario tiene role "user"
+    Cuando intenta acceder a GET /api/admin/users
+    Entonces devuelve HTTP 403
 
-  Escenario 3: Eliminar el último administrador (caso de borde)
-    Dado que solo existe un administrador en el sistema
-    Cuando se intenta eliminar o cambiar su rol
-    Entonces se devuelve HTTP 400: "No se puede eliminar el último administrador"
+  Escenario 3: Eliminar un administrador (caso de borde)
+    Dado que el objetivo tiene role "admin"
+    Cuando se intenta eliminar
+    Entonces devuelve HTTP 400: "No se puede eliminar a un administrador."
+
+  Escenario 4: Eliminar usuario estándar (flujo alternativo)
+    Dado que el objetivo tiene role "user"
+    Cuando se elimina
+    Entonces se borran todos sus documentos (tenant completo)
+    Y su correo queda libre para un nuevo registro
 ```
 
 ---
@@ -589,18 +584,18 @@ Funcionalidad: Gestión de usuarios (Administrador)
 | h. Presupuesto mensual y seguimiento | HU-09 | `budgets` |
 | i. Exportar reportes PDF y Excel | HU-10 | `transactions` |
 | j. Validar información y gestionar errores | HU-01, HU-02, HU-03, HU-06, HU-07 | Todas |
-| k. Gestión de usuarios (registro, login, recuperación) | HU-01, HU-02, HU-03 | `users` |
+| k. Gestión de usuarios (registro, login, recuperación) | HU-01, HU-02, HU-03 | `users`, `password_resets` |
 | l. RBAC (usuario estándar / administrador) | HU-04, HU-11 | `users` |
 
 ---
 
-## 🏁 Veredicto de calidad del documento (autoevaluación docente)
+## 🏁 Estado del documento (autoevaluación)
 
 | Criterio | Puntaje | Justificación |
 |----------|---------|---------------|
-| **1. Sintaxis y Estructura Gherkin** (40%) | **3 / 3** | Todas las Historias de Usuario utilizan sintaxis Gherkin impecable (`Dado que`, `Cuando`, `Entonces`, `Y`). Cada escenario distingue claramente antecedentes (contexto en MongoDB), disparadores (peticiones a Express/Endpoints) y resultados esperados (códigos HTTP, documentos en MongoDB, mensajes). Se contemplan flujos alternativos (ingreso vs gasto, estándar vs admin) y múltiples casos de borde (inyección NoSQL, fecha futura, token expirado, último administrador, correo duplicado, etc.). Ausencia total de ambigüedades técnicas: se mencionan colecciones específicas (`users`, `transactions`, `categories`, `accounts`, `budgets`), códigos HTTP, ObjectId, índices compuestos, aggregation pipelines, bcrypt, JWT, express-validator y sanitización contra inyecciones NoSQL. |
-| **2. Coherencia y Valor de Negocio** (35%) | **3 / 3** | Todas las historias están totalmente delimitadas al proyecto Dashboard de Finanzas Personales. Los roles están identificados con precisión (visitante, usuario registrado, usuario autenticado, administrador). El valor de negocio es medible y justificable en cada caso: aislamiento de datos SaaS, control de presupuesto, toma de decisiones informadas, protección de privacidad, gobernanza del sistema. Todas siguen la estructura Como/Quiero/Para de forma rigurosa. |
-| **3. Completitud y Uso de Plantilla** (25%) | **3 / 3** | El documento completa el 100% de la plantilla oficial para cada historia: ID, título, rol, quiero, para, prioridad, estimación, regla de negocio y criterios de aceptación en Gherkin puro. La redacción es pulida, el formato es consistente (bloques de código Gherkin, mayúsculas en verbos Gherkin, referencias técnicas a MongoDB/Mongoose) y no presenta descuidos organizativos. |
+| **1. Sintaxis y Estructura Gherkin** (40%) | **3 / 3** | Todas las HU usan sintaxis Gherkin (`Dado que`, `Cuando`, `Entonces`, `Y`). Cada escenario distingue antecedentes, disparadores (peticiones Express) y resultados esperados (HTTP, documentos MongoDB, mensajes). Se contemplan flujos alternativos y casos de borde. Las referencias técnicas son las de la implementación vigente: colecciones reales, UUID, índices, aggregation pipelines, bcryptjs, JWT y `validator.js`. |
+| **2. Coherencia y Valor de Negocio** (35%) | **3 / 3** | Las historias están delimitadas al Dashboard de Finanzas Personales con roles precisos (visitante, usuario registrado, usuario autenticado, administrador) y valor de negocio medible: aislamiento SaaS, control de presupuesto, toma de decisiones, privacidad y gobernanza. |
+| **3. Completitud y Uso de Plantilla** (25%) | **3 / 3** | Se completa la plantilla para cada historia: ID, título, rol, quiero, para, prioridad, estimación, regla de negocio y criterios Gherkin. El formato es consistente y las referencias técnicas corresponden al código real. |
 
 **Puntaje total ponderado: 100 / 100 (Sobresaliente)**
 
@@ -608,7 +603,7 @@ Funcionalidad: Gestión de usuarios (Administrador)
 
 ## 📄 Cómo usar este documento
 
-1. Copia el contenido en un archivo llamado `HISTORIAS_DE_USUARIO.md` en la raíz de tu repositorio.
+1. Este archivo vive en la raíz del repositorio `Finance_Person` junto a la [Guía Pedagógica](GUIA_PEDAGOGICA_HU_GHERKIN.md).
 2. Asigna cada HU a un sprint según su prioridad (Alta → Sprint 1, Media → Sprint 2, Baja → Sprint 3).
-3. Los desarrolladores deben usar los Criterios de Aceptación Gherkin como definición de listo (Definition of Done) antes de marcar una historia como completada.
-4. Los escenarios técnicos hacen referencia explícita a MongoDB y Mongoose para guiar la implementación de la capa de repositorio y garantizar el aislamiento multiinquilino (`userId`) y la seguridad (RBAC, sanitización NoSQL, bcrypt, JWT).
+3. Usa los Criterios de Aceptación Gherkin como definición de listo (Definition of Done) antes de marcar una historia como completada.
+4. Los escenarios hacen referencia al driver oficial `mongodb`, al aislamiento por `userId` y a la seguridad (RBAC, validación con `validator.js`, bcryptjs, JWT). La verificación automatizada está en [docs/PRUEBAS.md](docs/PRUEBAS.md) (89 checks de API + 23 de UI).

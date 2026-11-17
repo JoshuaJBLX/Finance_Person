@@ -2,6 +2,8 @@
 
 **Instructivo metodológico, marco conceptual INVEST/BDD y especificación práctica aplicada al módulo de Checkout de Mercado Libre.**
 
+> **Nota:** este documento es un instructivo metodológico con ejemplos de dominio de Mercado Libre. La especificación Gherkin **aplicada a Finance Person** (ya alineada con MongoDB Atlas) está en [HISTORIAS_DE_USUARIO.md](HISTORIAS_DE_USUARIO.md).
+
 ---
 
 ## 1. Marco Teórico y Conceptual

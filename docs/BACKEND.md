@@ -38,14 +38,15 @@ HTTP (rutas) → Controller → Service → Repository → MongoDB Atlas
 - Conexión: `MONGODB_URI` en `.env`. Base: `finance_person` (o `MONGODB_DB`).
 - `server/config/database.js` crea los índices y expone `connect()` / `getDb()` / `close()`.
 - Colecciones: `users`, `categories`, `accounts`, `transactions`, `budgets`, `password_resets`.
-- Las relaciones FK se resuelven con `$lookup` (agregaciones) y borrados en cascada explícitos en los repositorios.
+- Las relaciones se resuelven con `$lookup` (agregaciones) y borrados en cascada explícitos en los repositorios.
+- Todas las capas (repositorio → servicio → controlador) son **asíncronas** (`async/await`) porque el driver `mongodb` no es síncrono.
 
-### Tablas
+### Colecciones
 
 **users**
 | Campo | Descripción |
 |---|---|
-| id | UUID (PK) |
+| `_id` | UUID v4 (PK; se expone como `id` en la API) |
 | firstName / lastName | Nombre y apellido |
 | email | Único |
 | passwordHash | bcrypt (10 rondas) |
@@ -55,24 +56,24 @@ HTTP (rutas) → Controller → Service → Repository → MongoDB Atlas
 **categories**
 | Campo | Descripción |
 |---|---|
-| id / name / type / color | Datos base (`income` \| `expense`) |
-| userId | `NULL` + `isSystem=1` ⇒ categoría global del sistema |
-| isSystem | 0 = propia, 1 = compartida (solo admin edita) |
+| `_id` / name / type / color | Datos base (`income` \| `expense`) |
+| userId | `null` + `isSystem: true` ⇒ categoría global del sistema |
+| isSystem | booleano: `false` = propia, `true` = compartida (solo admin edita) |
 
 **accounts**
-- id, userId, name (única por usuario), type (`cash|bank|savings|credit|other`), initialBalance, isDefault.
+- `_id`, userId, name (única por usuario), type (`cash|bank|savings|credit|other`), initialBalance, isDefault (booleano).
 
 **transactions**
-- id, userId, accountId (FK), categoryId (FK, `SET NULL`), type (`income|expense`), amount (>0), description, date.
+- `_id`, userId, accountId, categoryId, type (`income|expense`), amount (>0), description, date; `accountName`/`categoryName` se añaden con `$lookup`.
 - Índices por `(userId, date)` y `(userId, type)`.
 
 **budgets**
-- id, userId, categoryId, month (`AAAA-MM`), amount; único por `(userId, categoryId, month)`.
+- `_id`, userId, categoryId, month (`AAAA-MM`), amount; índice único por `(userId, categoryId, month)`.
 
 **password_resets**
-- token, userId, expiresAt, used — flujo de recuperación de contraseña.
+- `_id` (token), userId, expiresAt, used — flujo de recuperación de contraseña (expira en 5 min).
 
-> Todos los FK de tablas de usuario tienen `ON DELETE CASCADE`: al borrar un usuario se borra **todo** su tenant.
+> No hay FK nativos en MongoDB: las cascadas son explícitas en los repositorios (`userRepository.deleteUser`, `categoryRepository.remove`). Al borrar un usuario se borra **todo** su tenant.
 
 ## 4. Autenticación y sesión
 
