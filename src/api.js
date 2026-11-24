@@ -1,3 +1,5 @@
+import { store } from './store.js';
+
 export const apiClient = {
   token: null,
 
@@ -25,6 +27,12 @@ export const apiClient = {
     const json = await res.json().catch(() => null);
 
     if (!res.ok) {
+      // Un JWT expirado en una ruta protegida cierra la sesión y vuelve al login.
+      if (res.status === 401 && !path.startsWith('/auth/')) {
+        store.logout();
+        apiClient.setToken(null);
+        if (typeof window !== 'undefined') window.location.hash = '#/login';
+      }
       const err = new Error(json?.error || `Error ${res.status}`);
       err.status = res.status;
       err.details = json?.details || null;

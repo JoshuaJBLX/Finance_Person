@@ -1,17 +1,17 @@
 # Pruebas Automatizadas del Proyecto
 
-Suite de pruebas **end-to-end** sobre la API real (`scripts/test-api.mjs`) y **verificación de la interfaz** (`scripts/verify-ui.mjs`). Levantan el servidor contra la **base `finance_person_test`** de Atlas (`NODE_ENV=test`), ejecutan verificaciones sobre todas las funcionalidades y limpian los documentos al arrancar. La base real (`finance_person`) no se toca.
+Suite de pruebas **end-to-end** sobre la API real (`scripts/test-api.mjs`) y **verificación de la interfaz** (`scripts/verify-ui.mjs`). Levantan el servidor contra la **base `finance_person_test`** (`NODE_ENV=test`), ejecutan verificaciones sobre todas las funcionalidades y limpian los documentos al arrancar. La base real (`finance_person`) no se toca. Por defecto usan la URI de `.env` (Atlas); para forzar MongoDB local: `$env:MONGODB_URI='mongodb://127.0.0.1:27017'` (PowerShell) o `MONGODB_URI=mongodb://127.0.0.1:27017` (bash).
 
 ## Ejecutar
 
 ```bash
-npm test        # Suite e2e de la API (89 checks)
-npm run test:ui # Verificación headless de la interfaz (23 checks)
+npm test        # Suite e2e de la API (104 checks)
+npm run test:ui # Verificación headless de la interfaz (32 checks)
 ```
 
 Código de salida: `0` = todo correcto · `1` = hay fallos.
 
-Última ejecución sobre Atlas: **89/89** checks de API y **23/23** de UI, todos correctos.
+Última ejecución: **104/104** checks de API y **32/32** de UI, todos correctos, tanto sobre Atlas como sobre MongoDB local (`127.0.0.1:27017`).
 
 > La suite UI usa **jsdom** (DOM headless en Node). Está declarado en `devDependencies` e `npm install` lo instala junto con el resto; si no lo tienes: `npm install --save-dev jsdom`.
 
@@ -24,14 +24,15 @@ Código de salida: `0` = todo correcto · `1` = hay fallos.
 
 > Node 18+: las suites requieren `fetch` global (disponible desde Node 18) y `import()` dinámico (ESM).
 
-## Cobertura (10 secciones · 89 checks)
+## Cobertura (10 secciones · 104 checks)
 
 ### 1. Autenticación y registro
 - Registro de usuario nuevo (201 + token), email duplicado (409), contraseña débil (400), email inválido (400).
-- Login correcto / contraseña incorrecta (401), `GET /auth/me`, y acceso sin token (401).
+- Login correcto / contraseña incorrecta (401), `GET /auth/me`, acceso sin token (401), usuario inexistente (401 con mensaje genérico) y JWT expirado (401).
 
 ### 2. Recuperación de contraseña (flujo demo)
 - `forgot-password` con y sin cuenta, `verify-reset`, `reset-password`, login con la **nueva** clave (200) y rechazo de la **anterior** (401).
+- Contraseña nueva débil (400, `passwordHash` intacto), token ya usado y token expirado en `reset-password`/`verify-reset` (400).
 
 ### 3. Perfil de usuario
 - Actualización de nombre/apellido y persistencia, nombre vacío (400), cambio de contraseña: actual incorrecta (400), sin actual (400) y flujo correcto.
@@ -39,6 +40,7 @@ Código de salida: `0` = todo correcto · `1` = hay fallos.
 ### 4. Categorías (CRUD + sistema)
 - Listado con bootstrap (≥10), creación, duplicado (409, sin distinción de mayúsculas), tipo/color inválidos (400), renombrado.
 - **Categorías del sistema**: el admin crea/renombra; son visibles para todos; un usuario normal recibe **403** al editarlas o borrarlas.
+- **Borrado en cascada**: al eliminar una categoría con movimientos, estos quedan con `categoryId: null` y su presupuesto desaparece.
 
 ### 5. Cuentas (CRUD + por defecto)
 - Creación con saldo inicial, nombre duplicado (409), tipo/saldo inválidos (400), marcar como predeterminada (solo una), borrado de cuenta **con** movimientos (400) y **sin** movimientos (200).
@@ -47,27 +49,29 @@ Código de salida: `0` = todo correcto · `1` = hay fallos.
 - Creación de ingreso/egreso, validaciones (monto negativo, fecha, tipo → 400).
 - **Aislamiento**: usar cuenta o categoría de otro usuario → 400.
 - Balance por cuenta tras un ingreso (100 + 1000 = 1100).
-- Filtros: `type`, `search` (búsqueda "Nómina" = 12 salarios), rango `from`/`to`, `categoryId`.
+- Filtros: `type`, `search` (búsqueda "Nómina" = 12 salarios), rango `from`/`to`, `categoryId`; filtro sin coincidencias devuelve `rows: []` y `total: 0`.
+- Paginación `?page=2&limit=50`: responde `page`, `limit`, `total` y aplica el `offset` correctamente.
 - Actualización y borrado; el listado se refleja correctamente.
 
 ### 7. Presupuestos
 - Mes actual con 7 presupuestos generados (dataset demo) y progreso/restante numérico.
 - Resumen del mes (total = suma, count = 7), mes inválido (400), **upsert idempotente** (misma `id` al reescribir), categoría ajena (400), borrado.
+- Gasto por encima del límite: `spent=520`, `remaining=-20`, `progress=1.04` (sin tope artificial).
 
 ### 8. Reportes
-- `summary`: `income − expenses = balance` y `count` = total de movimientos.
+- `summary`: `income − expenses = balance` y `count` = total de movimientos; rango sin movimientos devuelve todos los totales en 0.
 - `by-category` (ingresos y egresos), tipo inválido (400), `by-account`, `monthly` (12 meses ordenados), `full` (bundle consistente), rango `from > to` (400).
 
 ### 9. Administración (RBAC)
 - Usuario normal → **403** en `/admin/*`.
-- Admin: lista de usuarios, estadísticas globales, movimientos por usuario (demo ≥ 100, valen ≥ 15), `overview`, eliminación de usuarios y liberación del email.
+- Admin: lista de usuarios, estadísticas globales, movimientos por usuario (demo ≥ 100, valen ≥ 15), `overview`, eliminación de usuarios y liberación del email; eliminar a un **administrador** → 400.
 
 ### 10. Aislamiento multiinquilino
 - Las cuentas de cada usuario son **disjuntas**.
 - Actualizar/eliminar datos de otro usuario → 404; editar categoría ajena → 403.
 - El admin ve el total global de todos los tenants.
 
-## Verificación de la interfaz (headless · 23 checks)
+## Verificación de la interfaz (headless · 32 checks)
 
 `npm run test:ui` ejecuta `scripts/verify-ui.mjs`: monta las **vistas del frontend real** (módulos de `src/`) en jsdom contra la API en vivo y comprueba que **cada dato que se visualiza** coincide con lo que devuelve la API:
 
@@ -75,6 +79,10 @@ Código de salida: `0` = todo correcto · `1` = hay fallos.
 2. **Dashboard (demo)** — KPIs de ingresos/gastos/balance del mes y patrimonio total contra `/api/reports/summary` y `/api/accounts`; tasa de ahorro; chip y listado del presupuesto (`% utilizado`, filas por categoría); una fila por cuenta con su saldo exacto.
 3. **Movimientos (demo)** — contador y número de filas de la tabla contra `/api/transactions`, y formato de montos con signo.
 4. **Actualización en vivo** — tras crear un movimiento desde el panel admin, las tarjetas se **refrescan solas** (evento `fp:data-changed`) y el nuevo total coincide con la API.
+5. **Historial vacío (HU-07 Esc 3)** — al filtrar un mes sin movimientos, el contador muestra `0 movimientos` y la tabla muestra el estado vacío.
+6. **Reportes (HU-10)** — bundle `/reports/full`, matriz de exportación (6 columnas, una fila por movimiento), botones presentes, archivos `.xlsx` y `.pdf` generados realmente (en un directorio temporal) y estado sin datos con totales 0 y detalle vacío.
+7. **Presupuesto excedido (HU-09 Esc 2)** — la vista muestra `104.0%` y aplica la barra/porcentaje en rojo (`progress--over`).
+8. **JWT expirado (HU-02 Esc 4)** — una petición protegida con token vencido limpia la sesión y redirige a `#/login`.
 
 Detalle técnico: en jsdom no hay canvas, así que `src/utils/charts.js` detecta el entorno headless (`NODE_ENV=test`) y no inicializa Chart.js, permitiendo que el resto del render (KPIs, presupuesto, cuentas) se complete y verifique. El flujo real en el navegador no cambia.
 
@@ -85,6 +93,9 @@ Detalle técnico: en jsdom no hay canvas, así que `src/utils/charts.js` detecta
 3. **Migración a MongoDB**: los repositorios pasaron de síncronos a `async/await` (driver nativo), se reemplazaron los JOIN por `$lookup`, las agregaciones por pipelines y las FK por cascadas explícitas. La API HTTP quedó idéntica.
 4. **`collation` en agregaciones**: el driver no expone `.collation()` en un `AggregationCursor`; se pasa como opción de `aggregate()`.
 5. **Seed lento**: se cachearon las fechas existentes y se agruparon las inserciones en paralelo para que el arranque no tardara minutos contra Atlas.
+6. **Exportación PDF en Node/CJS**: `jspdf-autotable` exponía la función en `default.default`, por lo que `autoTable(...)` fallaba fuera del bundle de Vite. Se normaliza la importación en `src/views/ReportsView.js` (`autoTableModule.default || autoTableModule`); el PDF se genera correctamente en navegador y en headless.
+7. **JWT expirado sin cierre de sesión en el cliente**: `src/api.js` ahora detecta el 401 de rutas protegidas (excluyendo `/auth/`), limpia la sesión y redirige a `#/login`.
+8. **Arranque lento de Atlas**: el tiempo de espera del servidor en las suites se amplió de 20 s a 60 s para absorber la latencia del seed en Atlas.
 
 ## Base de pruebas
 

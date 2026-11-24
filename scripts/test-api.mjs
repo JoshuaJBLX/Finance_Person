@@ -8,11 +8,14 @@
  *
  * Uso:  npm test
  */
+import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
+import jwt from 'jsonwebtoken';
+import { MongoClient } from 'mongodb';
 import dayjs from 'dayjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -21,6 +24,8 @@ const TMP = join(os.tmpdir(), 'opencode', `fp-api-test-${Date.now()}`);
 mkdirSync(TMP, { recursive: true });
 const DB_PATH = join(TMP, 'finance-test.db');
 const BASE = `http://127.0.0.1:${PORT}`;
+const TEST_DB = process.env.MONGODB_TEST_DB || 'finance_person_test';
+let mongoClient = null;
 
 /* ---------- Reportero ---------- */
 const results = { passed: 0, failed: 0, failures: [] };
@@ -53,7 +58,7 @@ child.stderr.on('data', (d) => (logs += d));
 
 const waitUp = async () => {
   const t0 = Date.now();
-  while (Date.now() - t0 < 20000) {
+  while (Date.now() - t0 < 60000) {
     try { if ((await fetch(`${BASE}/api/health`)).ok) return; } catch { /* not ready */ }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -64,6 +69,9 @@ const waitUp = async () => {
 (async () => {
   try {
     await waitUp();
+    // Conexión directa para preparar datos de caso de borde (token de reset expirado).
+    mongoClient = new MongoClient(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017');
+    await mongoClient.connect();
 
     /* ---- Sesiones ---- */
     const adminUser = await login('admin@finance.person', 'Admin12345');
@@ -97,6 +105,17 @@ const waitUp = async () => {
 
       const noAuth = await req('GET', '/api/transactions');
       check('sin token, /api/transactions → 401', noAuth.status === 401);
+
+      const unknownLogin = await req('POST', '/api/auth/login', { body: { email: 'nadie@fn.test', password: 'Test12345' } });
+      check('login con usuario inexistente → 401 con mensaje genérico', unknownLogin.status === 401 && unknownLogin.json.error === 'Credenciales inválidas.', `status=${unknownLogin.status}`);
+
+      const expiredToken = jwt.sign(
+        { sub: testId, email: 'test@fn.test', role: 'user', name: 'Test User' },
+        process.env.JWT_SECRET || 'finance-person-dev-secret-change-in-prod',
+        { expiresIn: '-1h' }
+      );
+      const withExpired = await req('GET', '/api/transactions', { token: expiredToken });
+      check('JWT expirado en ruta protegida → 401', withExpired.status === 401, `status=${withExpired.status}`);
     }
 
     /* =2= RECUPERACIÓN ============================================= */
@@ -116,9 +135,31 @@ const waitUp = async () => {
       const reset = await req('POST', '/api/auth/reset-password', { body: { token, password: 'NuevaClave123' } });
       check('reset-password → 200', reset.status === 200);
 
+      const weakToken = (await req('POST', '/api/auth/forgot-password', { body: { email: 'test@fn.test' } })).json.token;
+      const weakReset = await req('POST', '/api/auth/reset-password', { body: { token: weakToken, password: '123' } });
+      check('reset-password con contraseña débil → 400', weakReset.status === 400 && String(weakReset.json.error).includes('8 caracteres'), `status=${weakReset.status}`);
+      const afterWeak = await req('POST', '/api/auth/login', { body: { email: 'test@fn.test', password: 'NuevaClave123' } });
+      check('passwordHash no se actualiza con reset débil', afterWeak.status === 200, `status=${afterWeak.status}`);
+
       check('login con la nueva contraseña → 200', (await login('test@fn.test', 'NuevaClave123')).token);
       check('login con la contraseña anterior → 401', (await req('POST', '/api/auth/login', { body: { email: 'test@fn.test', password: 'Test12345' } })).status === 401);
       testT = (await login('test@fn.test', 'NuevaClave123')).token;
+
+      const reused = await req('POST', '/api/auth/reset-password', { body: { token, password: 'OtraClave123' } });
+      check('reset-password con token ya usado → 400', reused.status === 400, `status=${reused.status}`);
+      const usedVerify = await req('GET', `/api/auth/verify-reset?token=${token}`);
+      check('verify-reset con token ya usado → 400', usedVerify.status === 400, `status=${usedVerify.status}`);
+
+      const expiredResetToken = `expired-${Date.now()}`;
+      const expiredUserId = (await login('test@fn.test', 'NuevaClave123')).user.id;
+      await mongoClient.db(TEST_DB).collection('password_resets').insertOne({
+        token: expiredResetToken,
+        userId: expiredUserId,
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        used: false
+      });
+      const expiredReset = await req('POST', '/api/auth/reset-password', { body: { token: expiredResetToken, password: 'OtraClave123' } });
+      check('reset-password con token expirado → 400', expiredReset.status === 400 && String(expiredReset.json.error).includes('expiró'), `status=${expiredReset.status}`);
     }
 
     /* =3= PERFIL ==================================================== */
@@ -184,6 +225,20 @@ const waitUp = async () => {
 
       const delCat = await req('DELETE', `/api/categories/${customCat.id}`, { token: testT });
       check('eliminar categoría propia → 200', delCat.status === 200);
+
+      // Cascada: movimientos quedan sin categoría y presupuestos se borran
+      const cascadeCat = await req('POST', '/api/categories', { token: testT, body: { name: 'Cascada Test', type: 'expense' } });
+      const cascadeId = cascadeCat.json.id;
+      const defaultAcc = (await req('GET', '/api/accounts', { token: testT })).json.find((a) => a.name === 'Efectivo');
+      await req('POST', '/api/transactions', { token: testT, body: { accountId: defaultAcc.id, categoryId: cascadeId, type: 'expense', amount: 10, description: 'Cascada Test', date: '2026-10-05' } });
+      const cascadeBudget = await req('POST', '/api/budgets', { token: testT, body: { categoryId: cascadeId, month: '2026-10', amount: 100 } });
+      check('precondición: presupuesto de la categoría creado', cascadeBudget.status === 200 && !!cascadeBudget.json.id);
+
+      await req('DELETE', `/api/categories/${cascadeId}`, { token: testT });
+      const txCascade = await req('GET', '/api/transactions?search=Cascada%20Test', { token: testT });
+      check('eliminar categoría con movimientos → movimiento queda con categoryId=null', txCascade.json.total === 1 && txCascade.json.rows[0].categoryId === null, `total=${txCascade.json.total}`);
+      const budgetCascade = await req('GET', '/api/budgets?month=2026-10', { token: testT });
+      check('eliminar categoría con presupuesto → presupuesto borrado (CASCADE)', !budgetCascade.json.some((b) => b.id === cascadeBudget.json.id));
     }
 
     /* =5= CUENTAS =================================================== */
@@ -263,6 +318,13 @@ const waitUp = async () => {
       const catFilter = await req('GET', `/api/transactions?categoryId=${demoCat.id}&limit=500`, { token: demoT });
       check('filtro por categoría aplicado', catFilter.status === 200 && catFilter.json.rows.every((t) => t.categoryId === demoCat.id));
 
+      const emptyFilter = await req('GET', '/api/transactions?search=NO_EXISTE_ESTA_BUSQUEDA&limit=50', { token: demoT });
+      check('filtro sin resultados → 200 con rows vacío y total 0', emptyFilter.status === 200 && emptyFilter.json.total === 0 && emptyFilter.json.rows.length === 0, `status=${emptyFilter.status} total=${emptyFilter.json.total}`);
+
+      const totalAll = (await req('GET', '/api/transactions?limit=1', { token: demoT })).json.total;
+      const paged = await req('GET', '/api/transactions?page=2&limit=50', { token: demoT });
+      check('paginación page=2&limit=50 → page, limit, total y offset aplicado', paged.status === 200 && paged.json.page === 2 && paged.json.limit === 50 && paged.json.total === totalAll && paged.json.rows.length === Math.max(0, Math.min(50, totalAll - 50)), `status=${paged.status} page=${paged.json.page} limit=${paged.json.limit} rows=${paged.json.rows.length} total=${totalAll}`);
+
       // Actualización y borrado
       const upd = await req('PUT', `/api/transactions/${txIncome.json.id}`, { token: testT, body: { description: 'Sueldo editado', amount: 1100 } });
       check('actualizar monto/descripción → 200', upd.status === 200 && upd.json.amount === 1100);
@@ -312,6 +374,15 @@ const waitUp = async () => {
       await req('DELETE', `/api/budgets/${first.json.id}`, { token: testT });
       const gone = await req('GET', `/api/budgets?month=2026-11`, { token: testT });
       check('presupuesto eliminado ya no aparece', gone.status === 200 && !gone.json.some((b) => b.id === first.json.id));
+
+      // Gasto por encima del límite: spent=520, remaining=-20, progress=1.04
+      const overCat = await req('POST', '/api/categories', { token: testT, body: { name: 'Exceso Test', type: 'expense' } });
+      const overBudget = await req('POST', '/api/budgets', { token: testT, body: { categoryId: overCat.json.id, month: '2026-10', amount: 500 } });
+      const ef = (await req('GET', '/api/accounts', { token: testT })).json.find((a) => a.name === 'Efectivo');
+      await req('POST', '/api/transactions', { token: testT, body: { accountId: ef.id, categoryId: overCat.json.id, type: 'expense', amount: 520, description: 'Exceso presupuesto', date: '2026-10-15' } });
+      const overList = await req('GET', '/api/budgets?month=2026-10', { token: testT });
+      const over = overList.json.find((b) => b.id === overBudget.json.id);
+      check('gasto excede presupuesto → spent=520, remaining=-20, progress=1.04', !!over && over.spent === 520 && over.remaining === -20 && Math.abs(over.progress - 1.04) < 1e-9, `spent=${over?.spent} remaining=${over?.remaining} progress=${over?.progress}`);
     }
 
     /* =8= REPORTES ================================================== */
@@ -319,6 +390,9 @@ const waitUp = async () => {
     {
       const summary = await req('GET', '/api/reports/summary', { token: demoT });
       check('summary: income − expenses = balance', summary.status === 200 && Math.abs(summary.json.income - summary.json.expenses - summary.json.balance) < 0.01 && summary.json.income > 0);
+
+      const emptyMonth = await req('GET', '/api/reports/summary?from=2020-01-01&to=2020-01-31', { token: demoT });
+      check('resumen de mes sin movimientos → ingresos/gastos/balance/rate/count en 0', emptyMonth.status === 200 && emptyMonth.json.income === 0 && emptyMonth.json.expenses === 0 && emptyMonth.json.balance === 0 && emptyMonth.json.savingsRate === 0 && emptyMonth.json.count === 0, `status=${emptyMonth.status} ${JSON.stringify(emptyMonth.json)}`);
       const countList = await req('GET', '/api/transactions?limit=1', { token: demoT });
       check('summary.count coincide con el total de movimientos', summary.json.count === countList.json.total, `count=${summary.json.count} vs total=${countList.json.total}`);
 
@@ -370,6 +444,10 @@ const waitUp = async () => {
       check('admin puede eliminar un usuario → 200', removed.status === 200);
       const regAgain = await req('POST', '/api/auth/register', { body: { firstName: 'Temp', lastName: 'User', email: 'baja@fn.test', password: 'Baja12345' } });
       check('el email liberado puede registrarse de nuevo → 201', regAgain.status === 201);
+
+      const adminMe = await req('GET', '/api/auth/me', { token: adminT });
+      const delAdmin = await req('DELETE', `/api/admin/users/${adminMe.json.id}`, { token: adminT });
+      check('admin no puede eliminar a un administrador → 400', delAdmin.status === 400 && String(delAdmin.json.error).includes('administrador'), `status=${delAdmin.status}`);
     }
 
     /* =10= AISLAMIENTO MULTIINQUILINO =============================== */
@@ -406,6 +484,7 @@ const waitUp = async () => {
     results.failed++;
   } finally {
     child.kill();
+    if (mongoClient) await mongoClient.close();
     await new Promise((r) => setTimeout(r, 300));
     rmSync(TMP, { recursive: true, force: true });
   }

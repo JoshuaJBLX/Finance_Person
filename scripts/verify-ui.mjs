@@ -10,15 +10,18 @@
  *
  * Uso: npm run test:ui
  */
+import 'dotenv/config';
 import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { JSDOM } from 'jsdom';
+import jwt from 'jsonwebtoken';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-process.env.NODE_ENV = process.env.NODE_ENV || 'test'; // stub de Chart.js en headless (src/utils/charts.js)
+// Forzar modo test aunque .env traiga NODE_ENV=development (dotenv se carga antes que esta línea).
+process.env.NODE_ENV = 'test'; // stub de Chart.js en headless (src/utils/charts.js)
 const PORT = 4198;
 const TMP = join(os.tmpdir(), 'opencode', `fp-ui-test-${Date.now()}`);
 mkdirSync(TMP, { recursive: true });
@@ -46,7 +49,7 @@ child.stderr.on('data', (d) => (logs += d));
 
 const waitUp = async () => {
   const t0 = Date.now();
-  while (Date.now() - t0 < 20000) {
+  while (Date.now() - t0 < 60000) {
     try { if ((await fetch(`${BASE}/api/health`)).ok) return; } catch { /* no listo aún */ }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -223,14 +226,92 @@ function setupDOM() {
         date: dayjs().format('YYYY-MM-DD')
       });
 
-      await new Promise((r) => setTimeout(r, 500)); // deja que el debounce refresque (120 ms)
+      // El refresco tiene debounce de 120 ms + petición a Atlas: se espera hasta que se vea.
+      for (let i = 0; i < 30 && Number(root.querySelector('#aTx').textContent.trim()) < before + 1; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
       const after = Number(root.querySelector('#aTx').textContent.trim());
       check('Tras crear un movimiento, el panel se refresca solo (+1)', after === before + 1, `antes=${before} despues=${after}`);
 
       const stats2 = await fetch(`${BASE}/api/admin/stats`, { headers: { Authorization: `Bearer ${adminSession.token}` } }).then((r) => r.json());
-      check('El nuevo total coincide con la API', Number(root.querySelector('#aTx').textContent) === stats2.transactions);
+      for (let i = 0; i < 20 && Number(root.querySelector('#aTx').textContent.trim()) !== stats2.transactions; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      check('El nuevo total coincide con la API', Number(root.querySelector('#aTx').textContent.trim()) === stats2.transactions);
       const created = await fetch(`${BASE}/api/transactions?search=Verificaci%C3%B3n%20en%20vivo`, { headers: { Authorization: `Bearer ${adminSession.token}` } }).then((r) => r.json());
       check('El movimiento creado queda registrado en la API', created.total === 1 && created.rows[0].amount === 1234.5);
+    }
+
+    /* ==== 5. Historial sin resultados (HU-07 Esc 3) ==== */
+    section('Historial: filtro sin movimientos');
+    {
+      const { TransactionsView } = await import('../src/views/TransactionsView.js');
+      const root = document.getElementById('view');
+      await TransactionsView.mount(root);
+      root.querySelector('#f-from').value = '2020-01-01';
+      root.querySelector('#f-to').value = '2020-01-31';
+      root.querySelector('#filtersForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      for (let i = 0; i < 30 && root.querySelector('#txCount').textContent !== '0 movimientos'; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      check('filtro sin resultados → contador 0 y estado vacío en el frontend', root.querySelector('#txCount').textContent === '0 movimientos' && root.querySelector('#txBody').textContent.includes('Sin movimientos que coincidan con los filtros.'));
+    }
+
+    /* ==== 6. Reportes: exportación y sin datos ==== */
+    section('Reportes: exportación Excel/PDF y sin datos');
+    {
+      const { ReportsView } = await import('../src/views/ReportsView.js');
+      const root = document.getElementById('view');
+      await ReportsView.mount(root);
+      const report = ReportsView.report;
+      check('bundle /reports/full cargado con resumen y detalle', !!report && Array.isArray(report.transactions) && !!report.summary && report.summary.count === report.transactions.length);
+      const matrix = ReportsView.buildMatrix();
+      check('matriz de exportación: 6 columnas y una fila por movimiento', matrix.headers.length === 6 && matrix.rows.length === report.transactions.length);
+      check('botones de exportación PDF/Excel presentes', !!root.querySelector('#exportPdf') && !!root.querySelector('#exportExcel'));
+
+      // XLSX.writeFile escribe en cwd: se redirige a TMP para no tocar el repositorio.
+      const cwd0 = process.cwd();
+      process.chdir(TMP);
+      try { ReportsView.exportExcel(root); } finally { process.chdir(cwd0); }
+      const xlsx = readdirSync(TMP).filter((f) => /^finance-person_\d{8}_\d{4}\.xlsx$/.test(f));
+      check('exportar Excel genera finance-person_YYYYMMDD_HHmm.xlsx', xlsx.length === 1, `archivos=${xlsx.join(',')}`);
+
+      // jsPDF.save() también escribe en cwd: se redirige a TMP para no tocar el repositorio.
+      process.chdir(TMP);
+      try { ReportsView.exportPdf(root); } finally { process.chdir(cwd0); }
+      const pdf = readdirSync(TMP).filter((f) => /^finance-person_\d{8}_\d{4}\.pdf$/.test(f));
+      check('exportar PDF genera finance-person_YYYYMMDD_HHmm.pdf', pdf.length === 1, `archivos=${pdf.join(',')}`);
+
+      const empty = await ReportsView.load(root, '2020-01-01', '2020-01-31');
+      check('sin datos: totales 0 y detalle vacío sin error', !!empty && empty.summary.income === 0 && empty.summary.expenses === 0 && empty.summary.balance === 0 && empty.transactions.length === 0 && root.querySelector('#rCount').textContent.trim() === '0 mov.');
+    }
+
+    /* ==== 7. Presupuesto excedido en rojo (HU-09 Esc 2) ==== */
+    section('Presupuesto: gasto excedido en rojo');
+    {
+      const { BudgetsView } = await import('../src/views/BudgetsView.js');
+      const root = document.getElementById('view');
+      const month = dayjs().format('YYYY-MM');
+      const cat = await api.post('/categories', { name: `Excedido UI ${Date.now()}`, type: 'expense' });
+      await api.post('/budgets', { categoryId: cat.id, month, amount: 500 });
+      const acc = (await api.get('/accounts'))[0];
+      await api.post('/transactions', { accountId: acc.id, categoryId: cat.id, type: 'expense', amount: 520, description: 'Excedido UI', date: dayjs().format('YYYY-MM-DD') });
+      await BudgetsView.mount(root);
+      const row = [...root.querySelectorAll('#budgetList > div')].find((el) => el.textContent.includes(cat.name));
+      check('gasto excedido → 104.0% y barra en rojo', !!row && row.textContent.includes('104.0%') && !!row.querySelector('.progress--over') && row.innerHTML.includes('color:var(--red)'), `fila=${row?.textContent.slice(0, 120)}`);
+    }
+
+    /* ==== 8. JWT expirado cierra sesión (HU-02 Esc 4) ==== */
+    section('Sesión expirada: redirección al login');
+    {
+      const expired = jwt.sign(
+        { sub: 'expirado', email: 'expirado@fn.test', role: 'user', name: 'Expirado' },
+        process.env.JWT_SECRET || 'finance-person-dev-secret-change-in-prod',
+        { expiresIn: '-1h' }
+      );
+      api.setToken(expired);
+      await api.get('/transactions').catch(() => {});
+      check('JWT expirado → sesión limpia y redirección a #/login', window.location.hash === '#/login' && store.session === null, `hash=${window.location.hash}`);
     }
 
     console.log('\n========================================');

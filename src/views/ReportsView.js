@@ -1,11 +1,15 @@
 import dayjs from 'dayjs';
 import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import autoTableModule from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { apiClient, makeQuery } from '../api.js';
 import { moneyWithCurrency, fmtDate, fmtMonthShort, pct, todayISO } from '../utils/format.js';
 import { destroyAll, lineChart, doughnutChart, barChart, PALETTE } from '../utils/charts.js';
 import { toast, notifyError } from '../utils/ui.js';
+
+// En Node/CJS el paquete expone la función en `default.default`; en el bundle del
+// navegador la importación ya entrega la función. Normalizamos ambos casos.
+const autoTable = autoTableModule.default || autoTableModule;
 
 export const ReportsView = {
   async mount(root) {

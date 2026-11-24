@@ -606,4 +606,4 @@ Funcionalidad: Gestión de usuarios (Administrador)
 1. Este archivo vive en la raíz del repositorio `Finance_Person` junto a la [Guía Pedagógica](GUIA_PEDAGOGICA_HU_GHERKIN.md).
 2. Asigna cada HU a un sprint según su prioridad (Alta → Sprint 1, Media → Sprint 2, Baja → Sprint 3).
 3. Usa los Criterios de Aceptación Gherkin como definición de listo (Definition of Done) antes de marcar una historia como completada.
-4. Los escenarios hacen referencia al driver oficial `mongodb`, al aislamiento por `userId` y a la seguridad (RBAC, validación con `validator.js`, bcryptjs, JWT). La verificación automatizada está en [docs/PRUEBAS.md](docs/PRUEBAS.md) (89 checks de API + 23 de UI).
+4. Los escenarios hacen referencia al driver oficial `mongodb`, al aislamiento por `userId` y a la seguridad (RBAC, validación con `validator.js`, bcryptjs, JWT). La verificación automatizada está en [docs/PRUEBAS.md](docs/PRUEBAS.md) (104 checks de API + 32 de UI).
